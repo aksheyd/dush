@@ -1,6 +1,6 @@
 # dush
 
-A fast drop-in replacement for `du -sh` on macOS.
+A fast, drop-in replacement for `du -sh` on macOS.
 
 <p align="center">
   <img src="assets/demo.gif" alt="dush terminal demo" width="800" />
