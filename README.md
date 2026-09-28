@@ -80,8 +80,8 @@ $ dush -c src bench tests
 `dush` is tested against BSD `du -sh` for 100% numerical and formatting parity:
 
 ```sh
-make test   # Runs Zig unit tests and Python end-to-end parity suite
-make bench  # Runs hermetic hyperfine benchmark suite
+make test   # Runs native Zig unit and end-to-end parity test suites
+make bench  # Runs hermetic hyperfine benchmark suite (uses native Zig generator)
 ```
 
 ## License

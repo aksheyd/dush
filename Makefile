@@ -18,9 +18,8 @@ $(TARGET): build.zig build.zig.zon src/main.zig
 	$(ZIG) build -Doptimize=ReleaseFast
 	cp zig-out/bin/dush $(TARGET)
 
-test:
+test: $(TARGET)
 	$(ZIG) build test
-	python3 tests/test_dush.py
 
 bench:
 	$(ZIG) build bench

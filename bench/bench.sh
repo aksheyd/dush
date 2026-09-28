@@ -22,6 +22,12 @@ set -eu
 DUSH="${1:-./dush}"
 if [ $# -gt 0 ]; then shift; fi
 
+GEN_FIXTURE=""
+if [ $# -gt 0 ] && [ -x "$1" ] && echo "$1" | grep -q "generate-fixture"; then
+    GEN_FIXTURE="$1"
+    shift
+fi
+
 TARGET=""
 RUNS=10
 MODE="warm"
@@ -70,7 +76,16 @@ fi
 if [ -z "$TARGET" ]; then
     TARGET="$FIX"
     if [ ! -d "$FIX" ] || [ "$REGEN" = "1" ]; then
-        python3 "$ROOT/bench/generate_fixture.py" "$FIX"
+        if [ -z "$GEN_FIXTURE" ] || [ ! -x "$GEN_FIXTURE" ]; then
+            if [ -x "$ROOT/zig-out/bin/generate-fixture" ]; then
+                GEN_FIXTURE="$ROOT/zig-out/bin/generate-fixture"
+            else
+                echo "Building generate-fixture with zig..."
+                (cd "$ROOT" && zig build -Doptimize=ReleaseFast)
+                GEN_FIXTURE="$ROOT/zig-out/bin/generate-fixture"
+            fi
+        fi
+        "$GEN_FIXTURE" "$FIX"
     fi
 fi
 
