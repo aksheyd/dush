@@ -9,6 +9,7 @@
         "src",
         "bench",
         "tests",
+        "assets",
         "Makefile",
         "README.md",
     },
