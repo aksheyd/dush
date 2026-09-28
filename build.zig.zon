@@ -1,0 +1,15 @@
+.{
+    .name = .dush,
+    .version = "1.0.0",
+    .fingerprint = 0x8041d6ac3b7853b5,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "bench",
+        "tests",
+        "Makefile",
+        "README.md",
+    },
+}
