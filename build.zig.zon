@@ -12,5 +12,6 @@
         "assets",
         "Makefile",
         "README.md",
+        "LICENSE",
     },
 }
