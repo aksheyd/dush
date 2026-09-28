@@ -3,3 +3,4 @@ zig-out/
 .bench/
 /dush
 *.dSYM/
+.DS_Store

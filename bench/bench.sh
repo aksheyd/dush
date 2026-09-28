@@ -14,7 +14,7 @@
 #   bench.sh <path-to-dush> [target-dir] [--runs N] [--cold] [--regen]
 # Or via zig:
 #   zig build bench
-#   zig build bench -- /Users/aksheydeokule/Documents/GitHub
+#   zig build bench -- /path/to/target
 #   zig build bench -- --cold
 
 set -eu
