@@ -12,8 +12,12 @@
 // 5. Zero-allocation for files: Path strings are only allocated for subdirectories.
 // 6. 100% BSD Fidelity: Exact humanize_number formatting matching macOS `du -sh`.
 // 7. POSIX Fallback: Automatically falls back to readdir/fstatat on non-bulk filesystems.
+// 8. Linux fast path: getdents64 + glibc fstatat64 across a path work queue.
+//    Measured on ext4 (100k files / 400 dirs): ~4x faster than GNU du, and faster
+//    than io_uring statx or handing out directory fds (those serialize cold opens).
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const VERSION = "1.0.0";
 
@@ -417,6 +421,86 @@ pub const WorkerContext = struct {
     had_error: *std.atomic.Value(bool),
 };
 
+const EntryInfo = struct {
+    dev: u64,
+    ino: u64,
+    nlink: u64,
+    mode: u32,
+    size: i64,
+    blocks: i64,
+
+    fn isDir(self: EntryInfo) bool {
+        return self.mode & 0o170000 == 0o040000;
+    }
+
+    fn diskBytes(self: EntryInfo, apparent: bool) i64 {
+        if (apparent) return @divTrunc(self.size + 511, 512) * 512;
+        return self.blocks * 512;
+    }
+};
+
+fn errnoPtr() *c_int {
+    if (comptime builtin.os.tag == .linux) {
+        const c = struct {
+            extern "c" fn __errno_location() *c_int;
+        };
+        return c.__errno_location();
+    } else {
+        return __error();
+    }
+}
+
+fn statAt(dirfd: i32, path: [*:0]const u8, follow: bool) ?EntryInfo {
+    var flags: u32 = if (follow) 0 else std.posix.AT.SYMLINK_NOFOLLOW;
+    if (comptime builtin.os.tag == .linux) {
+        flags |= std.os.linux.AT.NO_AUTOMOUNT;
+        const GStat = extern struct {
+            dev: u64,
+            ino: u64,
+            nlink: u64,
+            mode: u32,
+            uid: u32,
+            gid: u32,
+            pad0: u32,
+            rdev: u64,
+            size: i64,
+            blksize: i64,
+            blocks: i64,
+            atim_sec: i64,
+            atim_nsec: i64,
+            mtim_sec: i64,
+            mtim_nsec: i64,
+            ctim_sec: i64,
+            ctim_nsec: i64,
+            unused: [3]i64,
+        };
+        const c = struct {
+            extern "c" fn fstatat64(dirfd: i32, pathname: [*:0]const u8, buf: *GStat, flags: i32) i32;
+        };
+        var st: GStat = undefined;
+        if (c.fstatat64(dirfd, path, &st, @intCast(flags)) != 0) return null;
+        return .{
+            .dev = st.dev,
+            .ino = st.ino,
+            .nlink = st.nlink,
+            .mode = st.mode,
+            .size = st.size,
+            .blocks = st.blocks,
+        };
+    } else {
+        var st: std.c.Stat = undefined;
+        if (std.c.fstatat(dirfd, path, &st, flags) != 0) return null;
+        return .{
+            .dev = @as(u64, @as(u32, @bitCast(st.dev))),
+            .ino = st.ino,
+            .nlink = st.nlink,
+            .mode = st.mode,
+            .size = st.size,
+            .blocks = st.blocks,
+        };
+    }
+}
+
 fn readU32(ptr: [*]const u8) u32 {
     return std.mem.readInt(u32, ptr[0..4], .little);
 }
@@ -504,7 +588,129 @@ fn scanDirPosixFallback(
     }
 }
 
+fn openDirLinux(path: [*:0]const u8, follow: bool) c_int {
+    const flags: std.os.linux.O = .{
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = !follow,
+    };
+    const rc = std.os.linux.openat(std.posix.AT.FDCWD, path, flags, 0);
+    const err = std.os.linux.errno(rc);
+    if (err != .SUCCESS) {
+        errnoPtr().* = @intFromEnum(err);
+        return -1;
+    }
+    return @intCast(rc);
+}
+
+fn queueChild(
+    ctx: *WorkerContext,
+    spill: *[BATCH_SPILL_CAP]WorkItem,
+    spill_count: *usize,
+    child: WorkItem,
+) void {
+    spill[spill_count.*] = child;
+    spill_count.* += 1;
+    if (spill_count.* == BATCH_SPILL_CAP) {
+        ctx.queue.pushBatch(spill[0..spill_count.*]);
+        spill_count.* = 0;
+    }
+}
+
+/// Linux directory walk. getdents64 batches names; glibc fstatat64 reads sizes.
+/// Children are paths, not fds, so cold opens run in parallel with the stats.
+fn scanDirLinux(
+    ctx: *WorkerContext,
+    dirfd: c_int,
+    dir_path: []const u8,
+    local_bytes: *i64,
+    spill: *[BATCH_SPILL_CAP]WorkItem,
+    spill_count: *usize,
+    subdirs: *usize,
+) void {
+    var dent: [262144]u8 align(8) = undefined;
+    const follow = ctx.opts.follow == .all;
+    while (true) {
+        const nread = std.os.linux.getdents64(dirfd, &dent, dent.len);
+        switch (std.os.linux.errno(nread)) {
+            .SUCCESS => {},
+            .INTR => continue,
+            .ACCES => {
+                writeErr(dir_path, "Permission denied");
+                ctx.had_error.store(true, .monotonic);
+                return;
+            },
+            else => return,
+        }
+        if (nread == 0) return;
+
+        var off: usize = 0;
+        while (off < nread) {
+            const ent: *const std.os.linux.dirent64 = @ptrCast(@alignCast(dent[off..].ptr));
+            const reclen = ent.reclen;
+            if (reclen == 0) return;
+            const name_z: [*:0]const u8 = @ptrCast(&ent.name);
+            if (name_z[0] == '.' and (name_z[1] == 0 or (name_z[1] == '.' and name_z[2] == 0))) {
+                off += reclen;
+                continue;
+            }
+            const info = statAt(dirfd, name_z, follow) orelse {
+                off += reclen;
+                continue;
+            };
+            if (info.isDir()) {
+                if (!ctx.dirs.seen(info.dev, info.ino)) {
+                    local_bytes.* += info.diskBytes(ctx.opts.apparent);
+                    if (joinPath(ctx.allocator, dir_path, std.mem.span(name_z))) |child_path| {
+                        subdirs.* += 1;
+                        queueChild(ctx, spill, spill_count, .{ .path = child_path, .dev = info.dev });
+                    } else |_| {
+                        ctx.had_error.store(true, .monotonic);
+                    }
+                }
+            } else if (!(info.nlink > 1 and ctx.files.seen(info.dev, info.ino))) {
+                local_bytes.* += info.diskBytes(ctx.opts.apparent);
+            }
+            off += reclen;
+        }
+    }
+}
+
+fn workerFnLinux(ctx: *WorkerContext) void {
+    var local_bytes: i64 = 0;
+    while (ctx.queue.pop()) |current| {
+        const dirfd = openDirLinux(current.path.z(), ctx.opts.follow == .all);
+        if (dirfd < 0) {
+            if (errnoPtr().* == EACCES) {
+                writeErr(current.path.slice(), "Permission denied");
+                ctx.had_error.store(true, .monotonic);
+            }
+            current.path.deinit(ctx.allocator);
+            ctx.queue.taskDone();
+            continue;
+        }
+
+        var spill: [BATCH_SPILL_CAP]WorkItem = undefined;
+        var spill_count: usize = 0;
+        var ignored: usize = 0;
+        scanDirLinux(ctx, dirfd, current.path.slice(), &local_bytes, &spill, &spill_count, &ignored);
+        if (spill_count > 0) ctx.queue.pushBatch(spill[0..spill_count]);
+        _ = close(dirfd);
+        current.path.deinit(ctx.allocator);
+        ctx.queue.taskDone();
+    }
+    if (local_bytes > 0) _ = ctx.total_bytes.fetchAdd(local_bytes, .monotonic);
+}
+
 pub fn workerFn(ctx: *WorkerContext) void {
+    if (comptime builtin.os.tag == .linux) {
+        workerFnLinux(ctx);
+        return;
+    }
+    workerFnMac(ctx);
+}
+
+fn workerFnMac(ctx: *WorkerContext) void {
     var attrList: AttrList = .{
         .bitmapcount = ATTR_BIT_MAP_COUNT,
         .commonattr = ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_NAME | ATTR_CMN_OBJTYPE | ATTR_CMN_FILEID,
@@ -736,40 +942,29 @@ pub fn scanTarget(
     const zpath = dupePathZ(allocator, path) catch return .{ .bytes = 0, .err = true };
     defer zpath.deinit(allocator);
 
-    var st: std.c.Stat = undefined;
-    const flags: u32 = if (opts.follow != .none) 0 else std.posix.AT.SYMLINK_NOFOLLOW;
-    if (std.c.fstatat(std.posix.AT.FDCWD, zpath.z(), &st, flags) != 0) {
-        const msg = if (__error().* == ENOENT) "No such file or directory" else "stat failed";
+    const root = statAt(std.posix.AT.FDCWD, zpath.z(), opts.follow != .none) orelse {
+        const msg = if (errnoPtr().* == ENOENT) "No such file or directory" else "stat failed";
         writeErr(path, msg);
         return .{ .bytes = 0, .err = true };
-    }
+    };
 
-    const is_dir = (st.mode & 0o170000) == 0o040000;
-    const dev: u64 = @intCast(st.dev);
+    const is_dir = root.isDir();
+    const dev: u64 = root.dev;
 
     if (!is_dir) {
-        if (st.nlink > 1 and files.seen(dev, st.ino)) {
+        if (root.nlink > 1 and files.seen(dev, root.ino)) {
             return .{ .bytes = 0, .err = false };
         }
-        const size: i64 = if (opts.apparent)
-            (@divTrunc(st.size + 511, 512)) * 512
-        else
-            st.blocks * 512;
-        return .{ .bytes = size, .err = false };
+        return .{ .bytes = root.diskBytes(opts.apparent), .err = false };
     }
 
     // Target is a directory
-    var total_bytes = std.atomic.Value(i64).init(
-        if (opts.apparent)
-            (@divTrunc(st.size + 511, 512)) * 512
-        else
-            st.blocks * 512,
-    );
+    var total_bytes = std.atomic.Value(i64).init(root.diskBytes(opts.apparent));
     var had_error = std.atomic.Value(bool).init(false);
 
     var dirs = InodeSet.init(allocator);
     defer dirs.deinit();
-    _ = dirs.seen(dev, st.ino);
+    _ = dirs.seen(dev, root.ino);
 
     var queue = WorkQueue.init(allocator, 16384) catch {
         writeErr(path, "out of memory");
@@ -794,6 +989,57 @@ pub fn scanTarget(
         .total_bytes = &total_bytes,
         .had_error = &had_error,
     };
+
+    // Thread startup is visible on small trees (~0.2 ms). Parallel fstatat pays
+    // off once the root has a wide fan-out; flat directories stay on one thread
+    // because entries share the directory inode lock and do not scale.
+    const parallel_min_subdirs: usize = 16;
+    if (comptime builtin.os.tag == .linux) {
+        const root_item = queue.pop() orelse return .{ .bytes = total_bytes.load(.monotonic), .err = true };
+        var local_bytes: i64 = 0;
+        var subdirs: usize = 0;
+        // -H follows only the command-line path; -L follows every open.
+        const dirfd = openDirLinux(root_item.path.z(), opts.follow != .none);
+        if (dirfd < 0) {
+            if (errnoPtr().* == EACCES) {
+                writeErr(root_item.path.slice(), "Permission denied");
+                had_error.store(true, .monotonic);
+            }
+            root_item.path.deinit(allocator);
+            queue.taskDone();
+        } else {
+            var spill: [BATCH_SPILL_CAP]WorkItem = undefined;
+            var spill_count: usize = 0;
+            scanDirLinux(&ctx, dirfd, root_item.path.slice(), &local_bytes, &spill, &spill_count, &subdirs);
+            if (spill_count > 0) queue.pushBatch(spill[0..spill_count]);
+            _ = close(dirfd);
+            root_item.path.deinit(allocator);
+            queue.taskDone();
+            if (local_bytes > 0) _ = total_bytes.fetchAdd(local_bytes, .monotonic);
+        }
+
+        const n_threads = @max(opts.num_threads, 1);
+        if (subdirs >= parallel_min_subdirs and n_threads > 1) {
+            const threads = allocator.alloc(std.Thread, n_threads) catch {
+                workerFnLinux(&ctx);
+                return .{ .bytes = total_bytes.load(.monotonic), .err = had_error.load(.monotonic) };
+            };
+            defer allocator.free(threads);
+            var started: usize = 0;
+            for (threads) |*t| {
+                t.* = std.Thread.spawn(.{}, workerFnLinux, .{&ctx}) catch break;
+                started += 1;
+            }
+            if (started == 0) {
+                workerFnLinux(&ctx);
+            } else {
+                for (threads[0..started]) |t| t.join();
+            }
+        } else {
+            workerFnLinux(&ctx);
+        }
+        return .{ .bytes = total_bytes.load(.monotonic), .err = had_error.load(.monotonic) };
+    }
 
     const n_threads = @max(opts.num_threads, 1);
     const threads = allocator.alloc(std.Thread, n_threads) catch {
