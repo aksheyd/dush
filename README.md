@@ -10,15 +10,19 @@ A fast, drop-in replacement for `du -sh` on macOS.
 
 macOS `du -sh` is notoriously slow on large trees because POSIX traversal issues an individual `lstat`/`fstatat` syscall for every single file.
 
-`dush` matches `du -sh` output byte-for-byte, but runs **~3.2x faster than `du -sh`** and **~1.3x faster than [`diskus`](https://github.com/sharkdp/diskus)**:
+`dush` follows BSD `du -sh` formatting. On a warm Linux metadata walk it is the fastest of these tools — **4.9× `du -sh`**, **1.9× [`diskus`](https://github.com/sharkdp/diskus)**, and **1.8× [`pdu`](https://github.com/KSXGitHub/parallel-disk-usage)**:
 
-| Command | Mean | Min … Max | vs `dush` | Output Format |
+| Command | Mean | Min … Max | vs `dush` | Output |
 | :--- | :---: | :---: | :---: | :--- |
-| **`dush`** | **211 ms** | 200 … 219 ms | **1.00x** | `11G    /path` (exact BSD `du -sh`) |
-| `diskus` | 277 ms | 259 … 290 ms | 1.31x | `10.8 GB` or raw bytes |
-| `du -sh` | 669 ms | 642 … 717 ms | 3.17x | `11G    /path` |
+| **`dush`** | **13.8 ms** | 13.3 … 17.3 ms | **1.00×** | `1.6M    /path` |
+| [`pdu`](https://github.com/KSXGitHub/parallel-disk-usage) 0.24.0 | 24.9 ms | 22.6 … 30.2 ms | 1.81× | byte bar chart |
+| [`diskus`](https://github.com/sharkdp/diskus) 0.9.0 | 26.5 ms | 24.9 … 31.9 ms | 1.93× | `1650688` |
+| [`dust`](https://github.com/bootandy/dust) 1.2.6 | 40.6 ms | 36.6 … 50.1 ms | 2.95× | `1.6Mi` bar chart |
+| [`gdu`](https://github.com/dundee/gdu) 5.38.0 | 58.0 ms | 48.1 … 84.6 ms | 4.21× | one-line summary |
+| `du -sh` (GNU 9.4) | 67.3 ms | 56.0 … 88.4 ms | 4.89× | `1.6M    /path` |
+| [`dua`](https://github.com/Byron/dua-cli) 2.46.0 | 258.5 ms | 200.7 … 446.5 ms | 18.8× | per-directory list |
 
-*Measured with `hyperfine --shell none --warmup 3` on Apple Silicon (165,000 files, 18,000 dirs, ~10.8 GB).*
+*Measured with `hyperfine --shell none --warmup 3` on Linux x86_64 (4 cores, ext4, warm page cache). Tree: 100,001 files, 401 directories. `dush -k` and `du -sk` both reported 1612; `diskus` and `pdu` both reported 1,650,688 bytes, matching `du -B1`. Commands: `dush`, `pdu --max-depth 1 --bytes-format plain`, `diskus`, `dust -d 0 -c`, `gdu -n -p -s -c`, `du -sh`, `dua aggregate`. `gdu`'s summary printed `0 B` on this empty-file tree; the other tools reported about 1.6 MiB.*
 
 ### How it works
 
@@ -26,6 +30,7 @@ macOS `du -sh` is notoriously slow on large trees because POSIX traversal issues
 - **Work-stealing concurrency** — Traverses directory trees across all CPU cores with thread-local stacks and byte accumulators.
 - **Zero-allocation traversal** — Processes file metadata directly in-place from the kernel bulk buffer without heap-allocating path strings.
 - **Hardlink deduplication** — Accurately tracks multi-link inodes (`st_nlink > 1`) so hardlinks are counted exactly once.
+- **Linux fast path** — `getdents64` plus parallel `fstatat64` when a directory has a wide subdirectory fan-out.
 
 ## Installation
 
