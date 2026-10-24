@@ -490,7 +490,7 @@ test "parity: symlink inside a directory (-P and -L)" {
 fn mountFat32(allocator: std.mem.Allocator, dmg: []const u8, mountpoint: []const u8) !void {
     const create = try runCmd(allocator, &.{
         "hdiutil", "create", "-size", "64m", "-fs", "FAT32",
-        "-volname",         "DUSHFAT", "-ov", dmg,
+        "-volname", "DUSHFAT", "-ov", dmg,
     });
     defer create.deinit(allocator);
     if (create.term != .exited or create.term.exited != 0) {

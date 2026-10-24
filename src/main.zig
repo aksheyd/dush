@@ -1,8 +1,8 @@
 // dush - An ultra-fast drop-in replacement for `du -sh` on macOS.
 //
 // Performance Architecture:
-// 1. macOS getattrlistbulk(2): Reads directory entries and metadata in 64KB batches,
-//    eliminating individual lstat(2) / fstatat(2) syscalls per file.
+// 1. macOS getattrlistbulk(2): Reads directory entries and metadata in 64KB batches.
+//    fstatat runs only when the bulk result omits a size.
 // 2. Parallel Work-Stealing: Worker threads traverse subdirectories in parallel
 //    with thread-local queues and lock-free batch spilling to feed idle workers.
 //    The default worker count is the Apple Silicon performance-core count when
