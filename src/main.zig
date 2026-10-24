@@ -5,6 +5,8 @@
 //    eliminating individual lstat(2) / fstatat(2) syscalls per file.
 // 2. Parallel Work-Stealing: Worker threads traverse subdirectories in parallel
 //    with thread-local queues and lock-free batch spilling to feed idle workers.
+//    The default worker count is the Apple Silicon performance-core count when
+//    that is a smaller subset of the logical CPUs. Efficiency cores slow this walk.
 // 3. Thread-Local Accumulation: Workers accumulate sizes in local variables and
 //    merge once into the atomic total, eliminating atomic contention in file loops.
 // 4. Fast Hardlink Deduplication: (dev, ino) tracking is only consulted when
@@ -851,7 +853,8 @@ pub fn printUsage(prog: []const u8) void {
         \\DESCRIPTION:
         \\    dush calculates directory disk usage identically to `du -sh` but
         \\    significantly faster using macOS getattrlistbulk(2) syscalls and
-        \\    parallel work-stealing across all CPU cores.
+        \\    parallel work-stealing. On Apple Silicon the default worker count is the
+        \\    performance-core count; elsewhere it is the logical CPU count.
         \\
         \\OPTIONS:
         \\    -s, --summary       Display only a summary for each specified file/dir (default)
@@ -866,7 +869,7 @@ pub fn printUsage(prog: []const u8) void {
         \\    -H                  Follow symlinks specified on the command line
         \\    -L                  Follow all symbolic links
         \\    -P                  Do not follow any symbolic links (default)
-        \\    -t, --threads <N>   Number of worker threads (default: hardware core count)
+        \\    -t, --threads <N>   Number of worker threads (default: performance cores on Apple Silicon, else logical CPUs)
         \\    -v, --version       Display version information
         \\        --help          Display this help message
         \\
@@ -874,9 +877,26 @@ pub fn printUsage(prog: []const u8) void {
     writeAll(std.posix.STDOUT_FILENO, txt);
 }
 
+fn defaultThreadCount(perf_cores: ?usize, logical_cpus: usize) usize {
+    const logical = if (logical_cpus == 0) 1 else logical_cpus;
+    const chosen = if (perf_cores) |perf| blk: {
+        if (perf >= 1 and perf < logical) break :blk perf;
+        break :blk logical;
+    } else logical;
+    return @min(@max(chosen, 1), 64);
+}
+
+fn performanceCoreCount() ?usize {
+    var n: c_int = 0;
+    var len: usize = @sizeOf(c_int);
+    const rc = std.c.sysctlbyname("hw.perflevel0.physicalcpu", &n, &len, null, 0);
+    if (rc != 0 or n < 1) return null;
+    return @intCast(n);
+}
+
 fn defaultThreads() usize {
-    const n = std.Thread.getCpuCount() catch 8;
-    return @min(@max(n, 1), 64);
+    const logical = std.Thread.getCpuCount() catch 8;
+    return defaultThreadCount(performanceCoreCount(), logical);
 }
 
 // ---------------------------------------------------------------------------
@@ -1036,6 +1056,16 @@ test "inodeset dedup" {
     try std.testing.expect(s.seen(1, 100));
     try std.testing.expect(!s.seen(1, 101));
     try std.testing.expect(!s.seen(0, 0));
+}
+
+test "default threads prefer performance cores" {
+    try std.testing.expectEqual(@as(usize, 4), defaultThreadCount(4, 10));
+    try std.testing.expectEqual(@as(usize, 8), defaultThreadCount(8, 8));
+    try std.testing.expectEqual(@as(usize, 8), defaultThreadCount(null, 8));
+    try std.testing.expectEqual(@as(usize, 10), defaultThreadCount(0, 10));
+    try std.testing.expectEqual(@as(usize, 1), defaultThreadCount(null, 0));
+    try std.testing.expectEqual(@as(usize, 64), defaultThreadCount(null, 128));
+    try std.testing.expectEqual(@as(usize, 64), defaultThreadCount(80, 96));
 }
 
 test "queue push and pop" {
