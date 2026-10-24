@@ -8,6 +8,8 @@ A fast, drop-in replacement for `du -sh` on macOS.
 
 ## Why?
 
+`dush` (pronounced like "douche") is a macOS `du -sh` replacement.
+
 macOS `du -sh` is notoriously slow on large trees because POSIX traversal issues an individual `lstat`/`fstatat` syscall for every single file.
 
 `dush` matches `du -sh` output byte-for-byte, but runs **~3.2x faster than `du -sh`** and **~1.3x faster than [`diskus`](https://github.com/sharkdp/diskus)**:
