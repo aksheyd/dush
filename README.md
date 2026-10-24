@@ -12,20 +12,23 @@ A fast, drop-in replacement for `du -sh` on macOS.
 
 macOS `du -sh` is notoriously slow on large trees because POSIX traversal issues an individual `lstat`/`fstatat` syscall for every single file.
 
-`dush` matches `du -sh` output byte-for-byte, but runs **2.69x faster than `du -sh`** and **1.54x faster than [`diskus`](https://github.com/sharkdp/diskus)**:
+`dush` matches `du -sh` output byte-for-byte, but runs **3.73x faster than `du -sh`** and **2.02x faster than [`diskus`](https://github.com/sharkdp/diskus)**:
 
 | Command | Mean | Min … Max | vs `dush` | Output Format |
 | :--- | :---: | :---: | :---: | :--- |
-| **`dush`** | **154.2 ms** | 147.9 … 162.2 ms | **1.00x** | `11G    /path` |
-| `diskus` | 237.5 ms | 230.7 … 244.6 ms | 1.54x | `11419648000` |
-| `du -sh` | 415.2 ms | 412.1 … 426.1 ms | 2.69x | `11G    /path` |
+| **`dush`** | **118.8 ms** | 115.2 … 130.0 ms | **1.00x** | `11G    /path` |
+| `dush -t10` | 147.5 ms | 143.8 … 151.1 ms | 1.24x | `11G    /path` |
+| `diskus` | 239.5 ms | 229.0 … 272.7 ms | 2.02x | `11419648000` |
+| `du -sh` | 443.0 ms | 438.7 … 452.7 ms | 3.73x | `11G    /path` |
 
-*Measured with `hyperfine --shell none --warmup 3` on Apple Silicon (M4), 164,000 files, 18,001 directories, 11G, warm cache.*
+*Measured with `hyperfine --shell none --warmup 3` on an Apple M4 (4 performance cores), 164,000 files, 18,001 directories, 11G, warm cache. The default worker count is those 4 cores. `dush -t10` uses every logical core.*
+
+GNU coreutils 9.12 (`gdu -sh`) took 457.0 ms (453.2 … 466.9 ms) on that same tree. On the small bench fixture (16,410 files, 667 directories, 4.8M) dush took 8.0 ms, diskus 16.5 ms, and `du -sh` 23.3 ms.
 
 ### How it works
 
-- **`getattrlistbulk(2)` batching** — Reads names, file types, physical allocation sizes, and inode numbers in 64 KB kernel chunks in a single syscall (zero per-file `fstatat` overhead).
-- **Work-stealing concurrency** — Traverses directory trees across all CPU cores with thread-local stacks and byte accumulators.
+- **`getattrlistbulk(2)` batching** — Reads names, file types, physical allocation sizes, and inode numbers in 64 KB kernel chunks in a single syscall, and stats an entry only when that call omits the size.
+- **Work-stealing concurrency** — Traverses directory trees with thread-local stacks and byte accumulators. On Apple Silicon the default is the performance-core count; `-t` sets the worker count explicitly.
 - **Zero-allocation traversal** — Processes file metadata directly in-place from the kernel bulk buffer without heap-allocating path strings.
 - **Hardlink deduplication** — Accurately tracks multi-link inodes (`st_nlink > 1`) so hardlinks are counted exactly once.
 
