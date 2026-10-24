@@ -1,10 +1,12 @@
 // dush - An ultra-fast drop-in replacement for `du -sh` on macOS.
 //
 // Performance Architecture:
-// 1. macOS getattrlistbulk(2): Reads directory entries and metadata in 64KB batches,
-//    eliminating individual lstat(2) / fstatat(2) syscalls per file.
+// 1. macOS getattrlistbulk(2): Reads directory entries and metadata in 64KB batches.
+//    fstatat runs when the bulk result omits a size, and for every entry in -A mode.
 // 2. Parallel Work-Stealing: Worker threads traverse subdirectories in parallel
 //    with thread-local queues and lock-free batch spilling to feed idle workers.
+//    The default worker count is the Apple Silicon performance-core count when
+//    that is a smaller subset of the logical CPUs. Efficiency cores slow this walk.
 // 3. Thread-Local Accumulation: Workers accumulate sizes in local variables and
 //    merge once into the atomic total, eliminating atomic contention in file loops.
 // 4. Fast Hardlink Deduplication: (dev, ino) tracking is only consulted when
@@ -37,7 +39,8 @@ pub const ATTR_DIR_DATALENGTH: u32 = 0x00000020;
 
 pub const VREG: u32 = 1;
 pub const VDIR: u32 = 2;
-pub const VLNK: u32 = 4;
+// Darwin vtype: VNON=0, VREG=1, VDIR=2, VBLK=3, VCHR=4, VLNK=5.
+pub const VLNK: u32 = 5;
 
 pub const AttrList = extern struct {
     bitmapcount: u16 = ATTR_BIT_MAP_COUNT,
@@ -504,6 +507,17 @@ fn scanDirPosixFallback(
     }
 }
 
+fn allocatedSizeAt(dirfd: c_int, name: []const u8, apparent: bool) i64 {
+    var name_zbuf: [1024:0]u8 = undefined;
+    if (name.len >= name_zbuf.len) return 0;
+    @memcpy(name_zbuf[0..name.len], name);
+    name_zbuf[name.len] = 0;
+    var st: std.c.Stat = undefined;
+    if (std.c.fstatat(dirfd, &name_zbuf, &st, std.posix.AT.SYMLINK_NOFOLLOW) != 0) return 0;
+    if (apparent) return @divTrunc(st.size + 511, 512) * 512;
+    return st.blocks * 512;
+}
+
 pub fn workerFn(ctx: *WorkerContext) void {
     var attrList: AttrList = .{
         .bitmapcount = ATTR_BIT_MAP_COUNT,
@@ -607,9 +621,16 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         linkcount = readU32(buf[offset..].ptr);
                         offset += 4;
                     }
-                    if ((ret_dir & (ATTR_DIR_ALLOCSIZE | ATTR_DIR_DATALENGTH)) != 0) {
+                    const have_dir_size = (ret_dir & (ATTR_DIR_ALLOCSIZE | ATTR_DIR_DATALENGTH)) != 0;
+                    if (have_dir_size) {
                         allocsize = readI64(buf[offset..].ptr);
                         offset += 8;
+                    }
+                    // Physical size uses the bulk value when the filesystem returned it.
+                    // Apparent size always comes from stat: FAT32 can return a logical
+                    // length that is not du -A's 512-byte rounding.
+                    if (ctx.opts.apparent or !have_dir_size) {
+                        allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
                     }
 
                     if (linkcount > 1 and ctx.dirs.seen(current.dev, fileid)) {
@@ -682,9 +703,13 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         linkcount = readU32(buf[offset..].ptr);
                         offset += 4;
                     }
-                    if ((ret_file & (ATTR_FILE_ALLOCSIZE | ATTR_FILE_TOTALSIZE)) != 0) {
+                    const have_file_size = (ret_file & (ATTR_FILE_ALLOCSIZE | ATTR_FILE_TOTALSIZE)) != 0;
+                    if (have_file_size) {
                         allocsize = readI64(buf[offset..].ptr);
                         offset += 8;
+                    }
+                    if (ctx.opts.apparent or !have_file_size) {
+                        allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
                     }
 
                     if (linkcount > 1 and ctx.files.seen(current.dev, fileid)) {
@@ -851,7 +876,8 @@ pub fn printUsage(prog: []const u8) void {
         \\DESCRIPTION:
         \\    dush calculates directory disk usage identically to `du -sh` but
         \\    significantly faster using macOS getattrlistbulk(2) syscalls and
-        \\    parallel work-stealing across all CPU cores.
+        \\    parallel work-stealing. On Apple Silicon the default worker count is the
+        \\    performance-core count; elsewhere it is the logical CPU count.
         \\
         \\OPTIONS:
         \\    -s, --summary       Display only a summary for each specified file/dir (default)
@@ -866,7 +892,7 @@ pub fn printUsage(prog: []const u8) void {
         \\    -H                  Follow symlinks specified on the command line
         \\    -L                  Follow all symbolic links
         \\    -P                  Do not follow any symbolic links (default)
-        \\    -t, --threads <N>   Number of worker threads (default: hardware core count)
+        \\    -t, --threads <N>   Number of worker threads (default: performance cores on Apple Silicon, else logical CPUs)
         \\    -v, --version       Display version information
         \\        --help          Display this help message
         \\
@@ -874,9 +900,26 @@ pub fn printUsage(prog: []const u8) void {
     writeAll(std.posix.STDOUT_FILENO, txt);
 }
 
+fn defaultThreadCount(perf_cores: ?usize, logical_cpus: usize) usize {
+    const logical = if (logical_cpus == 0) 1 else logical_cpus;
+    const chosen = if (perf_cores) |perf| blk: {
+        if (perf >= 1 and perf < logical) break :blk perf;
+        break :blk logical;
+    } else logical;
+    return @min(@max(chosen, 1), 64);
+}
+
+fn performanceCoreCount() ?usize {
+    var n: c_int = 0;
+    var len: usize = @sizeOf(c_int);
+    const rc = std.c.sysctlbyname("hw.perflevel0.physicalcpu", &n, &len, null, 0);
+    if (rc != 0 or n < 1) return null;
+    return @intCast(n);
+}
+
 fn defaultThreads() usize {
-    const n = std.Thread.getCpuCount() catch 8;
-    return @min(@max(n, 1), 64);
+    const logical = std.Thread.getCpuCount() catch 8;
+    return defaultThreadCount(performanceCoreCount(), logical);
 }
 
 // ---------------------------------------------------------------------------
@@ -1036,6 +1079,16 @@ test "inodeset dedup" {
     try std.testing.expect(s.seen(1, 100));
     try std.testing.expect(!s.seen(1, 101));
     try std.testing.expect(!s.seen(0, 0));
+}
+
+test "default threads prefer performance cores" {
+    try std.testing.expectEqual(@as(usize, 4), defaultThreadCount(4, 10));
+    try std.testing.expectEqual(@as(usize, 8), defaultThreadCount(8, 8));
+    try std.testing.expectEqual(@as(usize, 8), defaultThreadCount(null, 8));
+    try std.testing.expectEqual(@as(usize, 10), defaultThreadCount(0, 10));
+    try std.testing.expectEqual(@as(usize, 1), defaultThreadCount(null, 0));
+    try std.testing.expectEqual(@as(usize, 64), defaultThreadCount(null, 128));
+    try std.testing.expectEqual(@as(usize, 64), defaultThreadCount(80, 96));
 }
 
 test "queue push and pop" {
