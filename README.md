@@ -20,7 +20,13 @@ macOS `du -sh` is notoriously slow on large trees because POSIX traversal issues
 
 *Measured with `hyperfine --shell none --warmup 3` on Apple Silicon (165,000 files, 18,000 dirs, ~10.8 GB).*
 
-On an Apple M4, a warm-cache walk of 164,029 files in a 58 MB tree finished in 151.5 ms, 2.94x faster than BSD `du -sh`.
+### Warm cache on Apple M4
+
+| Files | Tree | Time | Faster than BSD `du -sh` |
+| :---: | :---: | :---: | :---: |
+| 164,029 | 58 MB | **151.5 ms** | **2.94x** |
+
+*This 58 MB tree is not the ~10.8 GB run above.*
 
 ### How it works
 
