@@ -1,5 +1,7 @@
 # dush
 
+dush is pronounced like douche.
+
 A fast, drop-in replacement for `du -sh` on macOS.
 
 <p align="center">
