@@ -1,0 +1,6 @@
+name = "dush-proof"
+version = "0.1.0"
+defaultTargets = ["Dush"]
+
+[[lean_lib]]
+name = "Dush"
