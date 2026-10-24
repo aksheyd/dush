@@ -18,7 +18,7 @@ macOS `du -sh` is notoriously slow on large trees because POSIX traversal issues
 | `diskus` | 237.5 ms | 230.7 … 244.6 ms | 1.54x | `11419648000` |
 | `du -sh` | 415.2 ms | 412.1 … 426.1 ms | 2.69x | `11G    /path` |
 
-*Apple Silicon (M4), 164,000 files, 18,001 directories, 11G, warm cache.*
+*Measured with `hyperfine --shell none --warmup 3` on Apple Silicon (M4), 164,000 files, 18,001 directories, 11G, warm cache.*
 
 ### How it works
 
