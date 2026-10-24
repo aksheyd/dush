@@ -14,19 +14,13 @@ macOS `du -sh` is notoriously slow on large trees because POSIX traversal issues
 
 | Command | Mean | Min … Max | vs `dush` | Output Format |
 | :--- | :---: | :---: | :---: | :--- |
-| **`dush`** | **211 ms** | 200 … 219 ms | **1.00x** | `11G    /path` (exact BSD `du -sh`) |
-| `diskus` | 277 ms | 259 … 290 ms | 1.31x | `10.8 GB` or raw bytes |
-| `du -sh` | 669 ms | 642 … 717 ms | 3.17x | `11G    /path` |
+| **`dush`** (~10.8 GB) | **211 ms** | 200 … 219 ms | **1.00x** | `11G    /path` (exact BSD `du -sh`) |
+| `diskus` (~10.8 GB) | 277 ms | 259 … 290 ms | 1.31x | `10.8 GB` or raw bytes |
+| `du -sh` (~10.8 GB) | 669 ms | 642 … 717 ms | 3.17x | `11G    /path` |
+| **`dush`** (Apple M4, warm cache, 164,029 files, 58 MB) | **151.5 ms** | 148.6 … 156.1 ms | **1.00x** | `58M` |
+| `du -sh` (Apple M4, warm cache, 164,029 files, 58 MB) | 445.1 ms | 436.0 … 459.6 ms | 2.94x | `58M` |
 
-*Measured with `hyperfine --shell none --warmup 3` on Apple Silicon (165,000 files, 18,000 dirs, ~10.8 GB).*
-
-### Warm cache on Apple M4
-
-| Files | Tree | Time | Faster than BSD `du -sh` |
-| :---: | :---: | :---: | :---: |
-| 164,029 | 58 MB | **151.5 ms** | **2.94x** |
-
-*This 58 MB tree is not the ~10.8 GB run above.*
+*~10.8 GB rows: `hyperfine --shell none --warmup 3` on Apple Silicon (165,000 files, 18,000 dirs). Apple M4 rows: warm cache, 164,029 files, 58 MB.*
 
 ### How it works
 
