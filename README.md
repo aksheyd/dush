@@ -1,12 +1,14 @@
 # dush
 
-A fast, drop-in replacement for `du -sh` on macOS (dush is pronounced like douche).
+A fast, drop-in replacement for `du -sh` on macOS.
 
 <p align="center">
   <img src="assets/demo.gif" alt="dush terminal demo" width="800" />
 </p>
 
 ## Why?
+
+`dush` (pronounced like "douche") is a macOS `du -sh` replacement.
 
 macOS `du -sh` is notoriously slow on large trees because POSIX traversal issues an individual `lstat`/`fstatat` syscall for every single file.
 
