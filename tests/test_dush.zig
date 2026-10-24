@@ -565,6 +565,14 @@ test "parity: FAT32 bulk sizes match du" {
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r1.term);
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r2.term);
     try assertOutputParity(allocator, r1.stdout, r2.stdout);
+
+    const r3 = try runCmd(allocator, &.{ dush_bin, "-A", "-k", mnt });
+    defer r3.deinit(allocator);
+    const r4 = try runCmd(allocator, &.{ "du", "-A", "-sk", mnt });
+    defer r4.deinit(allocator);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r3.term);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r4.term);
+    try assertOutputParity(allocator, r3.stdout, r4.stdout);
 }
 
 test "parity: nonexistent path handling" {

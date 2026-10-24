@@ -2,7 +2,7 @@
 //
 // Performance Architecture:
 // 1. macOS getattrlistbulk(2): Reads directory entries and metadata in 64KB batches.
-//    fstatat runs only when the bulk result omits a size.
+//    fstatat runs when the bulk result omits a size, and for every entry in -A mode.
 // 2. Parallel Work-Stealing: Worker threads traverse subdirectories in parallel
 //    with thread-local queues and lock-free batch spilling to feed idle workers.
 //    The default worker count is the Apple Silicon performance-core count when
@@ -621,11 +621,15 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         linkcount = readU32(buf[offset..].ptr);
                         offset += 4;
                     }
-                    if ((ret_dir & (ATTR_DIR_ALLOCSIZE | ATTR_DIR_DATALENGTH)) != 0) {
+                    const have_dir_size = (ret_dir & (ATTR_DIR_ALLOCSIZE | ATTR_DIR_DATALENGTH)) != 0;
+                    if (have_dir_size) {
                         allocsize = readI64(buf[offset..].ptr);
                         offset += 8;
-                    } else {
-                        // FAT32 accepts getattrlistbulk but omits allocation size.
+                    }
+                    // Physical size uses the bulk value when the filesystem returned it.
+                    // Apparent size always comes from stat: FAT32 can return a logical
+                    // length that is not du -A's 512-byte rounding.
+                    if (ctx.opts.apparent or !have_dir_size) {
                         allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
                     }
 
@@ -699,10 +703,12 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         linkcount = readU32(buf[offset..].ptr);
                         offset += 4;
                     }
-                    if ((ret_file & (ATTR_FILE_ALLOCSIZE | ATTR_FILE_TOTALSIZE)) != 0) {
+                    const have_file_size = (ret_file & (ATTR_FILE_ALLOCSIZE | ATTR_FILE_TOTALSIZE)) != 0;
+                    if (have_file_size) {
                         allocsize = readI64(buf[offset..].ptr);
                         offset += 8;
-                    } else {
+                    }
+                    if (ctx.opts.apparent or !have_file_size) {
                         allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
                     }
 

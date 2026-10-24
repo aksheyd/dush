@@ -27,7 +27,7 @@ GNU coreutils 9.12 (`gdu -sh`) took 457.0 ms (453.2 … 466.9 ms) on that same t
 
 ### How it works
 
-- **`getattrlistbulk(2)` batching** — Reads names, file types, physical allocation sizes, and inode numbers in 64 KB kernel chunks in a single syscall, and stats an entry only when that call omits the size.
+- **`getattrlistbulk(2)` batching** — Reads names, file types, physical allocation sizes, and inode numbers in 64 KB kernel chunks in a single syscall. `fstatat` runs when that call omits the size, and apparent size (`-A`) always uses `stat`.
 - **Work-stealing concurrency** — Traverses directory trees with thread-local stacks and byte accumulators. On Apple Silicon the default is the performance-core count; `-t` sets the worker count explicitly.
 - **Zero-allocation traversal** — Processes file metadata directly in-place from the kernel bulk buffer without heap-allocating path strings.
 - **Hardlink deduplication** — Accurately tracks multi-link inodes (`st_nlink > 1`) so hardlinks are counted exactly once.
