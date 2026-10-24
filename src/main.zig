@@ -39,7 +39,8 @@ pub const ATTR_DIR_DATALENGTH: u32 = 0x00000020;
 
 pub const VREG: u32 = 1;
 pub const VDIR: u32 = 2;
-pub const VLNK: u32 = 4;
+// Darwin vtype: VNON=0, VREG=1, VDIR=2, VBLK=3, VCHR=4, VLNK=5.
+pub const VLNK: u32 = 5;
 
 pub const AttrList = extern struct {
     bitmapcount: u16 = ATTR_BIT_MAP_COUNT,

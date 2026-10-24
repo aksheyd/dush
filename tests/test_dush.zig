@@ -423,6 +423,70 @@ test "parity: symbolic links (-P, -L, -H)" {
     }
 }
 
+test "parity: symlink inside a directory (-P and -L)" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dush_bin = getDushBin();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path_len = try tmp.dir.realPath(io, &path_buf);
+    const root_path = path_buf[0..path_len];
+
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target_p = try std.fmt.bufPrint(&target_buf, "{s}/target", .{root_path});
+    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const link_p = try std.fmt.bufPrint(&link_buf, "{s}/link", .{root_path});
+
+    try tmp.dir.createDirPath(io, "target");
+
+    var file_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const fp = try std.fmt.bufPrint(&file_buf, "{s}/file", .{target_p});
+    const fp_z = try allocator.dupeZ(u8, fp);
+    defer allocator.free(fp_z);
+    const fd = open(fp_z, O_WRONLY | O_CREAT | O_TRUNC, MODE_644);
+    if (fd >= 0) {
+        var chunk: [4096]u8 = undefined;
+        @memset(&chunk, 'x');
+        var left: usize = 50 * 1024;
+        while (left > 0) {
+            const n = @min(left, chunk.len);
+            const wrote = write(fd, &chunk, n);
+            if (wrote <= 0) break;
+            left -= @intCast(wrote);
+        }
+        _ = close(fd);
+    }
+
+    const target_z = try allocator.dupeZ(u8, target_p);
+    defer allocator.free(target_z);
+    const link_z = try allocator.dupeZ(u8, link_p);
+    defer allocator.free(link_z);
+    _ = symlink(target_z, link_z);
+
+    {
+        const r1 = try runCmd(allocator, &.{ dush_bin, "-k", root_path });
+        defer r1.deinit(allocator);
+        const r2 = try runCmd(allocator, &.{ "du", "-sk", root_path });
+        defer r2.deinit(allocator);
+        try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r1.term);
+        try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r2.term);
+        try assertOutputParity(allocator, r1.stdout, r2.stdout);
+    }
+
+    {
+        const r1 = try runCmd(allocator, &.{ dush_bin, "-k", "-L", root_path });
+        defer r1.deinit(allocator);
+        const r2 = try runCmd(allocator, &.{ "du", "-sk", "-L", root_path });
+        defer r2.deinit(allocator);
+        try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r1.term);
+        try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r2.term);
+        try assertOutputParity(allocator, r1.stdout, r2.stdout);
+    }
+}
+
 test "parity: nonexistent path handling" {
     const allocator = std.testing.allocator;
     const dush_bin = getDushBin();
