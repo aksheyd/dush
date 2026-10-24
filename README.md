@@ -10,23 +10,15 @@ A fast, drop-in replacement for `du -sh` on macOS.
 
 macOS `du -sh` is notoriously slow on large trees because POSIX traversal issues an individual `lstat`/`fstatat` syscall for every single file.
 
-`dush` matches `du -sh` output byte-for-byte, but runs **~3.2x faster than `du -sh`** and **~1.3x faster than [`diskus`](https://github.com/sharkdp/diskus)**:
+`dush` matches `du -sh` output byte-for-byte, but runs **2.69x faster than `du -sh`** and **1.54x faster than [`diskus`](https://github.com/sharkdp/diskus)**:
 
 | Command | Mean | Min … Max | vs `dush` | Output Format |
 | :--- | :---: | :---: | :---: | :--- |
-| **`dush`** | **211 ms** | 200 … 219 ms | **1.00x** | `11G    /path` (exact BSD `du -sh`) |
-| `diskus` | 277 ms | 259 … 290 ms | 1.31x | `10.8 GB` or raw bytes |
-| `du -sh` | 669 ms | 642 … 717 ms | 3.17x | `11G    /path` |
+| **`dush`** | **154.2 ms** | 147.9 … 162.2 ms | **1.00x** | ` 11G	/tmp/dush-bench-11g` |
+| `diskus` | 237.5 ms | 230.7 … 244.6 ms | 1.54x | `11419648000` |
+| `du -sh` | 415.2 ms | 412.1 … 426.1 ms | 2.69x | ` 11G	/tmp/dush-bench-11g` |
 
-*Measured with `hyperfine --shell none --warmup 3` on Apple Silicon (165,000 files, 18,000 dirs, ~10.8 GB).*
-
-| Command | Mean | Min … Max | vs `dush` | Output Format |
-| :--- | :---: | :---: | :---: | :--- |
-| **`dush`** | **151.5 ms** | 148.6 … 156.1 ms | **1.00x** | `58M` |
-| `diskus` | 228.8 ms | 221.0 … 234.8 ms | 1.51x | `60,731,392` |
-| `du -sh` | 445.1 ms | 436.0 … 459.6 ms | 2.94x | `58M` |
-
-*Warm cache on an Apple M4 (164,029 files, 58 MB).*
+*Apple Silicon (M4), 164,000 files, 18,001 directories, 11G, warm cache.*
 
 ### How it works
 
