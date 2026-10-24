@@ -487,6 +487,86 @@ test "parity: symlink inside a directory (-P and -L)" {
     }
 }
 
+fn mountFat32(allocator: std.mem.Allocator, dmg: []const u8, mountpoint: []const u8) !void {
+    const create = try runCmd(allocator, &.{
+        "hdiutil", "create", "-size", "64m", "-fs", "FAT32",
+        "-volname",         "DUSHFAT", "-ov", dmg,
+    });
+    defer create.deinit(allocator);
+    if (create.term != .exited or create.term.exited != 0) {
+        std.debug.print("hdiutil create stderr:\n{s}\n", .{create.stderr});
+        return error.HdiutilCreate;
+    }
+
+    const attach = try runCmd(allocator, &.{
+        "hdiutil", "attach", "-nobrowse", "-mountpoint", mountpoint, dmg,
+    });
+    defer attach.deinit(allocator);
+    if (attach.term != .exited or attach.term.exited != 0) {
+        std.debug.print("hdiutil attach stderr:\n{s}\n", .{attach.stderr});
+        return error.HdiutilAttach;
+    }
+}
+
+test "parity: FAT32 bulk sizes match du" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dush_bin = getDushBin();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path_len = try tmp.dir.realPath(io, &path_buf);
+    const root_path = path_buf[0..path_len];
+
+    var dmg_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dmg = try std.fmt.bufPrint(&dmg_buf, "{s}/fat.dmg", .{root_path});
+    var mnt_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const mnt = try std.fmt.bufPrint(&mnt_buf, "{s}/mnt", .{root_path});
+    try tmp.dir.createDirPath(io, "mnt");
+
+    try mountFat32(allocator, dmg, mnt);
+    defer {
+        const detach = runCmd(allocator, &.{ "hdiutil", "detach", mnt }) catch null;
+        if (detach) |d| d.deinit(allocator);
+    }
+
+    var sub_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const sub = try std.fmt.bufPrint(&sub_buf, "{s}/sub", .{mnt});
+    const sub_z = try allocator.dupeZ(u8, sub);
+    defer allocator.free(sub_z);
+    _ = mkdir(sub_z, 0o755);
+
+    var file_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file_p = try std.fmt.bufPrint(&file_buf, "{s}/b.txt", .{mnt});
+    const file_z = try allocator.dupeZ(u8, file_p);
+    defer allocator.free(file_z);
+    const fd = open(file_z, O_WRONLY | O_CREAT | O_TRUNC, MODE_644);
+    if (fd >= 0) {
+        _ = write(fd, "hellohello\n", 11);
+        _ = close(fd);
+    }
+
+    var nested_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const nested_p = try std.fmt.bufPrint(&nested_buf, "{s}/a.txt", .{sub});
+    const nested_z = try allocator.dupeZ(u8, nested_p);
+    defer allocator.free(nested_z);
+    const fd2 = open(nested_z, O_WRONLY | O_CREAT | O_TRUNC, MODE_644);
+    if (fd2 >= 0) {
+        _ = write(fd2, "hello\n", 6);
+        _ = close(fd2);
+    }
+
+    const r1 = try runCmd(allocator, &.{ dush_bin, "-k", mnt });
+    defer r1.deinit(allocator);
+    const r2 = try runCmd(allocator, &.{ "du", "-sk", mnt });
+    defer r2.deinit(allocator);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r1.term);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r2.term);
+    try assertOutputParity(allocator, r1.stdout, r2.stdout);
+}
+
 test "parity: nonexistent path handling" {
     const allocator = std.testing.allocator;
     const dush_bin = getDushBin();

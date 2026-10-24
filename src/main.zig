@@ -507,6 +507,17 @@ fn scanDirPosixFallback(
     }
 }
 
+fn allocatedSizeAt(dirfd: c_int, name: []const u8, apparent: bool) i64 {
+    var name_zbuf: [1024:0]u8 = undefined;
+    if (name.len >= name_zbuf.len) return 0;
+    @memcpy(name_zbuf[0..name.len], name);
+    name_zbuf[name.len] = 0;
+    var st: std.c.Stat = undefined;
+    if (std.c.fstatat(dirfd, &name_zbuf, &st, std.posix.AT.SYMLINK_NOFOLLOW) != 0) return 0;
+    if (apparent) return @divTrunc(st.size + 511, 512) * 512;
+    return st.blocks * 512;
+}
+
 pub fn workerFn(ctx: *WorkerContext) void {
     var attrList: AttrList = .{
         .bitmapcount = ATTR_BIT_MAP_COUNT,
@@ -613,6 +624,9 @@ pub fn workerFn(ctx: *WorkerContext) void {
                     if ((ret_dir & (ATTR_DIR_ALLOCSIZE | ATTR_DIR_DATALENGTH)) != 0) {
                         allocsize = readI64(buf[offset..].ptr);
                         offset += 8;
+                    } else {
+                        // FAT32 accepts getattrlistbulk but omits allocation size.
+                        allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
                     }
 
                     if (linkcount > 1 and ctx.dirs.seen(current.dev, fileid)) {
@@ -688,6 +702,8 @@ pub fn workerFn(ctx: *WorkerContext) void {
                     if ((ret_file & (ATTR_FILE_ALLOCSIZE | ATTR_FILE_TOTALSIZE)) != 0) {
                         allocsize = readI64(buf[offset..].ptr);
                         offset += 8;
+                    } else {
+                        allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
                     }
 
                     if (linkcount > 1 and ctx.files.seen(current.dev, fileid)) {
