@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Lang = enum { zig, hash, yaml };
+const Lang = enum { zig, hash, yaml, lean };
 
 pub fn main(init: std.process.Init) !u8 {
     const alloc = init.arena.allocator();
@@ -25,6 +25,7 @@ pub fn main(init: std.process.Init) !u8 {
 fn report(path: []const u8, lang: Lang, text: []const u8) usize {
     var bad: usize = 0;
     var quote: u8 = 0;
+    var depth: usize = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
     var number: usize = 1;
     while (lines.next()) |line| : (number += 1) {
@@ -33,6 +34,7 @@ fn report(path: []const u8, lang: Lang, text: []const u8) usize {
         const col = switch (lang) {
             .zig => zigComment(line),
             .hash, .yaml => hashComment(line, &quote),
+            .lean => leanComment(line, &depth),
         } orelse continue;
         const kind = if (std.mem.trim(u8, line[0..col], " \t").len == 0) "full-line" else "trailing";
         std.debug.print("{s}:{d}: {s} comment\n", .{ path, number, kind });
@@ -58,6 +60,42 @@ pub fn zigComment(line: []const u8) ?usize {
         }
     }
     return null;
+}
+
+pub fn leanComment(line: []const u8, depth: *usize) ?usize {
+    var found: ?usize = if (depth.* > 0) 0 else null;
+    var in_string = false;
+    var i: usize = 0;
+    while (i < line.len) : (i += 1) {
+        const c = line[i];
+        const n: u8 = if (i + 1 < line.len) line[i + 1] else 0;
+        if (depth.* > 0) {
+            if (c == '/' and n == '-') {
+                depth.* += 1;
+                i += 1;
+            } else if (c == '-' and n == '/') {
+                depth.* -= 1;
+                i += 1;
+            }
+            continue;
+        }
+        if (in_string) {
+            if (c == '\\') i += 1 else if (c == '"') in_string = false;
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+        } else if (c == '\'' and i + 2 < line.len and line[i + 2] == '\'') {
+            i += 2;
+        } else if (c == '-' and n == '-') {
+            return found orelse i;
+        } else if (c == '/' and n == '-') {
+            if (found == null) found = i;
+            depth.* += 1;
+            i += 1;
+        }
+    }
+    return found;
 }
 
 pub fn hashComment(line: []const u8, quote: *u8) ?usize {
@@ -93,7 +131,7 @@ fn wordBreak(c: u8) bool {
 }
 
 fn skipped(path: []const u8) bool {
-    for ([_][]const u8{ ".git", "zig-out", ".zig-cache", ".bench", "tests/frozen", "tests/upstream", "fuzz-failures" }) |skip| {
+    for ([_][]const u8{ ".git", "zig-out", ".zig-cache", ".bench", "tests/frozen", "tests/upstream", "fuzz-failures", "proofs/.lake" }) |skip| {
         if (std.mem.eql(u8, path, skip)) return true;
     }
     return false;
@@ -102,6 +140,7 @@ fn skipped(path: []const u8) bool {
 fn langFor(path: []const u8) ?Lang {
     const base = std.fs.path.basename(path);
     if (std.mem.endsWith(u8, base, ".zig") or std.mem.eql(u8, base, "build.zig.zon")) return .zig;
+    if (std.mem.endsWith(u8, base, ".lean")) return .lean;
     if (std.mem.endsWith(u8, base, ".yml") or std.mem.endsWith(u8, base, ".yaml")) return .yaml;
     for ([_][]const u8{ ".sh", ".pl", ".py", ".tape" }) |ext| {
         if (std.mem.endsWith(u8, base, ext)) return .hash;
@@ -124,4 +163,16 @@ test "trailing and full-line comments are both found" {
     try std.testing.expectEqual(@as(?usize, null), hashComment("awk '", &q));
     try std.testing.expectEqual(@as(?usize, null), hashComment("  # inside quotes", &q));
     try std.testing.expectEqual(@as(?usize, 4), hashComment("' x # y", &q));
+}
+
+test "lean comments are found" {
+    var d: usize = 0;
+    try std.testing.expectEqual(@as(?usize, 11), leanComment("def x := 1 -- y", &d));
+    try std.testing.expectEqual(@as(?usize, null), leanComment("def s := \"a--b /-\"", &d));
+    try std.testing.expectEqual(@as(?usize, null), leanComment("def c := '-'", &d));
+    try std.testing.expectEqual(@as(?usize, 0), leanComment("/-- doc", &d));
+    try std.testing.expectEqual(@as(?usize, 0), leanComment("still doc -/", &d));
+    try std.testing.expectEqual(@as(usize, 0), d);
+    try std.testing.expectEqual(@as(?usize, 4), leanComment("def /- a /- b -/ -/ y", &d));
+    try std.testing.expectEqual(@as(?usize, null), leanComment("theorem t : a - b = c := rfl", &d));
 }
