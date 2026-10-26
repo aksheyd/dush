@@ -117,6 +117,15 @@ test "Scale matches du's block arithmetic" {
     try std.testing.expect(!k.passes(k.threshold(std.math.maxInt(u64)), 1 << 40));
 }
 
+test "a negative threshold rounds up without wrapping, like Apple's howmany" {
+    const ak = Scale.init(true, 512, 1024);
+    try std.testing.expectEqual(@as(u64, 1 << 54), ak.threshold(std.math.maxInt(u64)));
+    try std.testing.expect(!ak.passes(ak.threshold(std.math.maxInt(u64)), 1 << 20));
+    const ag = Scale.init(true, 512, 1 << 30);
+    try std.testing.expectEqual(@as(u64, 1 << 34), ag.threshold(std.math.maxInt(u64)));
+    try std.testing.expectEqual(@as(u64, 2), ag.threshold(3 << 29 | 1));
+}
+
 test "default threads prefer performance cores" {
     try std.testing.expectEqual(@as(usize, 4), defaultThreadCount(4, 10));
     try std.testing.expectEqual(@as(usize, 8), defaultThreadCount(8, 8));

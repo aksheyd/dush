@@ -171,6 +171,8 @@ pub const HN_B: c_int = 0x04;
 pub const HN_DIVISOR_1000: c_int = 0x08;
 pub const HN_AUTOSCALE: c_int = 0x20;
 
+pub const LC_ALL: c_int = 0;
+pub extern "c" fn setlocale(category: c_int, locale: ?[*:0]const u8) ?[*:0]u8;
 pub extern "c" fn fnmatch(pattern: [*:0]const u8, string: [*:0]const u8, flags: c_int) c_int;
 pub const FNM_NOMATCH: c_int = 1;
 pub const UF_NODUMP: u32 = 0x00000001;

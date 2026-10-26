@@ -25,10 +25,7 @@ fn hasEmptyOperand(operands: sys.FtsArgv) bool {
 const Line = struct { blocks: i64, label: [*:0]const u8 };
 
 fn runFast(allocator: std.mem.Allocator, cfg: *const cli.Config, links: *fts_walk.Links, out: format.Printer) ?u8 {
-    if (hasEmptyOperand(cfg.operands)) {
-        sys.__error().* = sys.ENOENT;
-        sys.err(1, "fts_open");
-    }
+    if (hasEmptyOperand(cfg.operands)) return null;
     errors.deferring = true;
     defer errors.deferring = false;
     var lines: std.ArrayListUnmanaged(Line) = .empty;
@@ -49,6 +46,7 @@ fn runFast(allocator: std.mem.Allocator, cfg: *const cli.Config, links: *fts_wal
 pub fn main(init: std.process.Init) u8 {
     const allocator = std.heap.c_allocator;
 
+    _ = sys.setlocale(sys.LC_ALL, "");
     preventMaterialization();
 
     const vec = init.minimal.args.vector;

@@ -52,7 +52,8 @@ pub const Scale = struct {
         if (raw == 0) return 0;
         const cb: u64 = @bitCast(@as(i64, self.cblocksize));
         const bs: u64 = @bitCast(@as(i64, self.blocksize));
-        return (raw / 512 *% cb +% (bs -% 1)) / bs;
+        const m = raw / 512 *% cb;
+        return m / bs + @intFromBool(m % bs != 0);
     }
 
     pub fn passes(self: Scale, adjusted_threshold: u64, n: i64) bool {
