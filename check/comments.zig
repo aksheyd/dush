@@ -29,7 +29,7 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn skipped(name: []const u8) bool {
-    for ([_][]const u8{ ".git", "zig-out", ".zig-cache", ".bench" }) |skip| {
+    for ([_][]const u8{ ".git", "zig-out", ".zig-cache", ".bench", "upstream" }) |skip| {
         if (std.mem.eql(u8, name, skip)) return true;
     }
     return false;

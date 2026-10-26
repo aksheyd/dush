@@ -603,6 +603,148 @@ test "parity: nonexistent path handling" {
     try std.testing.expect(std.mem.indexOf(u8, r.stderr, "No such file or directory") != null);
 }
 
+extern "c" fn chmod(path: [*:0]const u8, mode: std.c.mode_t) c_int;
+
+fn sortedErrorLines(allocator: std.mem.Allocator, stderr: []const u8, prog: []const u8) !std.ArrayListUnmanaged([]const u8) {
+    var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer lines.deinit(allocator);
+    var it = std.mem.splitScalar(u8, stderr, '\n');
+    while (it.next()) |line| {
+        if (line.len == 0) continue;
+        try std.testing.expect(std.mem.startsWith(u8, line, prog));
+        try lines.append(allocator, line[prog.len..]);
+    }
+    std.mem.sort([]const u8, lines.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lessThan);
+    return lines;
+}
+
+fn assertErrorParity(allocator: std.mem.Allocator, dush_argv: []const []const u8, du_argv: []const []const u8) !void {
+    const r1 = try runCmd(allocator, dush_argv);
+    defer r1.deinit(allocator);
+    const r2 = try runCmd(allocator, du_argv);
+    defer r2.deinit(allocator);
+
+    try std.testing.expectEqual(r2.term, r1.term);
+    try assertOutputParity(allocator, r1.stdout, r2.stdout);
+
+    var dush_lines = try sortedErrorLines(allocator, r1.stderr, "dush: ");
+    defer dush_lines.deinit(allocator);
+    var du_lines = try sortedErrorLines(allocator, r2.stderr, "du: ");
+    defer du_lines.deinit(allocator);
+    try std.testing.expect(du_lines.items.len > 0);
+    try std.testing.expectEqual(du_lines.items.len, dush_lines.items.len);
+    for (du_lines.items, dush_lines.items) |want, got| try std.testing.expectEqualStrings(want, got);
+}
+
+const LockedTree = struct {
+    tmp: std.testing.TmpDir,
+    root_buf: [std.fs.max_path_bytes]u8 = undefined,
+    root_len: usize = 0,
+
+    const locked = [_]struct { name: [:0]const u8, mode: std.c.mode_t }{
+        .{ .name = "a", .mode = 0o000 },
+        .{ .name = "b", .mode = 0o300 },
+        .{ .name = "c", .mode = 0o600 },
+        .{ .name = "d/g", .mode = 0o000 },
+    };
+
+    fn create(self: *LockedTree) !void {
+        const io = std.testing.io;
+        self.tmp = std.testing.tmpDir(.{});
+        self.root_len = try self.tmp.dir.realPath(io, &self.root_buf);
+        try self.tmp.dir.createDirPath(io, "a/sub");
+        try self.tmp.dir.createDirPath(io, "b");
+        try self.tmp.dir.createDirPath(io, "c");
+        try self.tmp.dir.createDirPath(io, "d");
+        try self.tmp.dir.writeFile(io, .{ .sub_path = "a/sub/f", .data = "x" ** 9000 });
+        try self.tmp.dir.writeFile(io, .{ .sub_path = "b/f", .data = "x" ** 9000 });
+        try self.tmp.dir.writeFile(io, .{ .sub_path = "c/f", .data = "x" ** 9000 });
+        try self.tmp.dir.writeFile(io, .{ .sub_path = "d/f", .data = "x" ** 5000 });
+        try self.tmp.dir.writeFile(io, .{ .sub_path = "d/g", .data = "x" ** 3000 });
+        for (locked) |l| try self.setMode(l.name, l.mode);
+    }
+
+    fn setMode(self: *LockedTree, name: []const u8, mode: std.c.mode_t) !void {
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const p = try std.fmt.bufPrintZ(&buf, "{s}/{s}", .{ self.root(), name });
+        try std.testing.expectEqual(@as(c_int, 0), chmod(p, mode));
+    }
+
+    fn root(self: *const LockedTree) []const u8 {
+        return self.root_buf[0..self.root_len];
+    }
+
+    fn sub(self: *const LockedTree, buf: []u8, name: []const u8) ![]const u8 {
+        return std.fmt.bufPrint(buf, "{s}/{s}", .{ self.root(), name });
+    }
+
+    fn destroy(self: *LockedTree) void {
+        for (locked) |l| self.setMode(l.name, 0o755) catch {};
+        self.tmp.cleanup();
+    }
+};
+
+test "parity: unreadable subdirectories warn and still print the total" {
+    const allocator = std.testing.allocator;
+    const dush_bin = getDushBin();
+
+    var tree: LockedTree = .{ .tmp = undefined };
+    try tree.create();
+    defer tree.destroy();
+    const r = tree.root();
+
+    try assertErrorParity(allocator, &.{ dush_bin, "-k", r }, &.{ "du", "-sk", r });
+    try assertErrorParity(allocator, &.{ dush_bin, "-A", "-k", r }, &.{ "du", "-A", "-sk", r });
+    try assertErrorParity(allocator, &.{ dush_bin, r }, &.{ "du", "-sh", r });
+    try assertErrorParity(allocator, &.{ dush_bin, "-L", "-k", r }, &.{ "du", "-L", "-sk", r });
+
+    var slash_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const slashed = try std.fmt.bufPrint(&slash_buf, "{s}/", .{r});
+    try assertErrorParity(allocator, &.{ dush_bin, "-k", slashed }, &.{ "du", "-sk", slashed });
+}
+
+test "parity: unreadable root arguments print no line" {
+    const allocator = std.testing.allocator;
+    const dush_bin = getDushBin();
+
+    var tree: LockedTree = .{ .tmp = undefined };
+    try tree.create();
+    defer tree.destroy();
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    for ([_][]const u8{ "a", "b", "a/sub", "c/f" }) |name| {
+        const p = try tree.sub(&buf, name);
+        try assertErrorParity(allocator, &.{ dush_bin, "-k", p }, &.{ "du", "-sk", p });
+    }
+    const searchable_only = try tree.sub(&buf, "c");
+    try assertErrorParity(allocator, &.{ dush_bin, "-k", searchable_only }, &.{ "du", "-sk", searchable_only });
+}
+
+test "parity: missing and unreadable arguments among several (-c)" {
+    const allocator = std.testing.allocator;
+    const dush_bin = getDushBin();
+
+    var tree: LockedTree = .{ .tmp = undefined };
+    try tree.create();
+    defer tree.destroy();
+
+    var a_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const a = try tree.sub(&a_buf, "a");
+    var d_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const d = try tree.sub(&d_buf, "d");
+    var nope_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const nope = try tree.sub(&nope_buf, "nope");
+    const r = tree.root();
+
+    try assertErrorParity(allocator, &.{ dush_bin, "-k", "-c", r, nope, a, d }, &.{ "du", "-sk", "-c", r, nope, a, d });
+    try assertErrorParity(allocator, &.{ dush_bin, "-k", "-c", nope }, &.{ "du", "-sk", "-c", nope });
+    try assertErrorParity(allocator, &.{ dush_bin, "-c", nope, d, a }, &.{ "du", "-sh", "-c", nope, d, a });
+}
+
 test "parity: deep directory hierarchy" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;

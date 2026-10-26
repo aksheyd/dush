@@ -49,8 +49,10 @@ extern "c" fn getattrlistbulk(
 extern "c" fn open(path: [*:0]const u8, oflag: c_int, ...) c_int;
 extern "c" fn close(fd: c_int) c_int;
 extern "c" fn __error() *c_int;
+extern "c" fn strerror(errnum: c_int) [*:0]const u8;
+extern "c" fn dup(fd: c_int) c_int;
+extern "c" fn dup2(fd: c_int, fd2: c_int) c_int;
 
-const ENOENT: c_int = 2;
 const EACCES: c_int = 13;
 const ENOTSUP: c_int = 45;
 const EINVAL: c_int = 22;
@@ -163,7 +165,7 @@ pub const Path = struct {
 };
 
 pub fn joinPath(allocator: std.mem.Allocator, parent: []const u8, child: []const u8) !Path {
-    const slash = if (parent.len == 0 or parent[parent.len - 1] == '/') false else true;
+    const slash = !(parent.len == 0 or (parent.len == 1 and parent[0] == '/'));
     const total_len = parent.len + (if (slash) @as(usize, 1) else 0) + child.len;
     const buf = try allocator.allocSentinel(u8, total_len, 0);
     @memcpy(buf[0..parent.len], parent);
@@ -257,6 +259,7 @@ pub const InodeSet = struct {
 pub const WorkItem = struct {
     path: Path,
     dev: u64,
+    size: i64 = 0,
 };
 
 pub const LOCAL_STACK_CAP = 64;
@@ -399,9 +402,18 @@ fn writeAll(fd: c_int, bytes: []const u8) void {
 }
 
 fn writeErr(path: []const u8, msg: []const u8) void {
-    var buf: [1024]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "dush: {s}: {s}\n", .{ path, msg }) catch return;
+    writeErrIn(path, "", msg);
+}
+
+fn writeErrIn(dir: []const u8, name: []const u8, msg: []const u8) void {
+    var buf: [3 * std.fs.max_path_bytes]u8 = undefined;
+    const sep = if (name.len == 0 or (dir.len == 1 and dir[0] == '/')) "" else "/";
+    const line = std.fmt.bufPrint(&buf, "dush: {s}{s}{s}: {s}\n", .{ dir, sep, name, msg }) catch return;
     writeAll(std.posix.STDERR_FILENO, line);
+}
+
+fn errnoMessage() []const u8 {
+    return std.mem.span(strerror(__error().*));
 }
 
 fn scanDirPosixFallback(
@@ -414,6 +426,8 @@ fn scanDirPosixFallback(
     spill_count: *usize,
 ) void {
     const dir = std.c.fdopendir(dirfd) orelse {
+        writeErr(dir_path, errnoMessage());
+        ctx.had_error.store(true, .monotonic);
         _ = close(dirfd);
         return;
     };
@@ -430,7 +444,11 @@ fn scanDirPosixFallback(
 
         var st: std.c.Stat = undefined;
         const name_z: [*:0]const u8 = @ptrCast(&de.name);
-        if (std.c.fstatat(dirfd, name_z, &st, flags) != 0) continue;
+        if (std.c.fstatat(dirfd, name_z, &st, flags) != 0) {
+            writeErrIn(dir_path, name, errnoMessage());
+            ctx.had_error.store(true, .monotonic);
+            continue;
+        }
 
         const is_dir = (st.mode & 0o170000) == 0o040000;
         const dev: u64 = @intCast(st.dev);
@@ -451,7 +469,7 @@ fn scanDirPosixFallback(
             local_bytes.* += size;
 
             if (joinPath(ctx.allocator, dir_path, name)) |child_path| {
-                spill[spill_count.*] = .{ .path = child_path, .dev = dev };
+                spill[spill_count.*] = .{ .path = child_path, .dev = dev, .size = size };
                 spill_count.* += 1;
                 if (spill_count.* == BATCH_SPILL_CAP) {
                     ctx.queue.pushBatch(spill[0..spill_count.*]);
@@ -515,10 +533,9 @@ pub fn workerFn(ctx: *WorkerContext) void {
 
         var dirfd = open(current.path.z(), 0x0000); // O_RDONLY
         if (dirfd < 0) {
-            if (__error().* == EACCES) {
-                writeErr(current.path.slice(), "Permission denied");
-                ctx.had_error.store(true, .monotonic);
-            }
+            writeErr(current.path.slice(), errnoMessage());
+            ctx.had_error.store(true, .monotonic);
+            local_bytes -= current.size;
             current.path.deinit(ctx.allocator);
             if (local_top == 0) {
                 ctx.queue.taskDone();
@@ -532,9 +549,13 @@ pub fn workerFn(ctx: *WorkerContext) void {
         while (true) {
             const ret = getattrlistbulk(dirfd, &attrList, &buf, buf.len, 0);
             if (ret < 0) {
-                if (bulk_attempts == 0 and (__error().* == ENOTSUP or __error().* == EINVAL)) {
+                const e = __error().*;
+                if (bulk_attempts == 0 and (e == ENOTSUP or e == EINVAL or e == EACCES)) {
                     scanDirPosixFallback(ctx, dirfd, parent_slice, current.dev, &local_bytes, &spill, &spill_count);
                     dirfd = -1; // Closed by scanDirPosixFallback
+                } else {
+                    writeErr(parent_slice, errnoMessage());
+                    ctx.had_error.store(true, .monotonic);
                 }
                 break;
             }
@@ -597,7 +618,7 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         local_bytes += allocsize;
 
                         if (joinPath(ctx.allocator, parent_slice, name_slice)) |child_path| {
-                            const child_item = WorkItem{ .path = child_path, .dev = current.dev };
+                            const child_item = WorkItem{ .path = child_path, .dev = current.dev, .size = allocsize };
                             if (ctx.queue.idle_workers.load(.monotonic) > 0 or local_top >= LOCAL_STACK_CAP) {
                                 spill[spill_count] = child_item;
                                 spill_count += 1;
@@ -624,13 +645,11 @@ pub fn workerFn(ctx: *WorkerContext) void {
                             const is_target_dir = (st.mode & 0o170000) == 0o040000;
                             if (is_target_dir) {
                                 if (!ctx.dirs.seen(dev, st.ino)) {
-                                    local_bytes += if (ctx.opts.apparent)
-                                        (@divTrunc(st.size + 511, 512)) * 512
-                                    else
-                                        st.blocks * 512;
+                                    const dir_size: i64 = if (ctx.opts.apparent) roundUp512(st.size) else st.blocks * 512;
+                                    local_bytes += dir_size;
 
                                     if (joinPath(ctx.allocator, parent_slice, name_slice)) |child_path| {
-                                        const child_item = WorkItem{ .path = child_path, .dev = dev };
+                                        const child_item = WorkItem{ .path = child_path, .dev = dev, .size = dir_size };
                                         if (ctx.queue.idle_workers.load(.monotonic) > 0 or local_top >= LOCAL_STACK_CAP) {
                                             spill[spill_count] = child_item;
                                             spill_count += 1;
@@ -695,7 +714,7 @@ pub fn workerFn(ctx: *WorkerContext) void {
         }
     }
 
-    if (local_bytes > 0) {
+    if (local_bytes != 0) {
         _ = ctx.total_bytes.fetchAdd(local_bytes, .monotonic);
     }
 }
@@ -704,6 +723,7 @@ pub fn workerFn(ctx: *WorkerContext) void {
 pub const ScanResult = struct {
     bytes: i64,
     err: bool,
+    printable: bool = true,
 };
 
 pub fn scanTarget(
@@ -712,15 +732,14 @@ pub fn scanTarget(
     opts: *const Options,
     files: *InodeSet,
 ) ScanResult {
-    const zpath = dupePathZ(allocator, path) catch return .{ .bytes = 0, .err = true };
+    const zpath = dupePathZ(allocator, path) catch return .{ .bytes = 0, .err = true, .printable = false };
     defer zpath.deinit(allocator);
 
     var st: std.c.Stat = undefined;
     const flags: u32 = if (opts.follow != .none) 0 else std.posix.AT.SYMLINK_NOFOLLOW;
     if (std.c.fstatat(std.posix.AT.FDCWD, zpath.z(), &st, flags) != 0) {
-        const msg = if (__error().* == ENOENT) "No such file or directory" else "stat failed";
-        writeErr(path, msg);
-        return .{ .bytes = 0, .err = true };
+        writeErr(path, errnoMessage());
+        return .{ .bytes = 0, .err = true, .printable = false };
     }
 
     const is_dir = (st.mode & 0o170000) == 0o040000;
@@ -737,6 +756,13 @@ pub fn scanTarget(
         return .{ .bytes = size, .err = false };
     }
 
+    const root_fd = open(zpath.z(), 0x0000); // O_RDONLY
+    if (root_fd < 0) {
+        writeErr(path, errnoMessage());
+        return .{ .bytes = 0, .err = true, .printable = false };
+    }
+    _ = close(root_fd);
+
     var total_bytes = std.atomic.Value(i64).init(
         if (opts.apparent)
             (@divTrunc(st.size + 511, 512)) * 512
@@ -751,13 +777,13 @@ pub fn scanTarget(
 
     var queue = WorkQueue.init(allocator, 16384) catch {
         writeErr(path, "out of memory");
-        return .{ .bytes = 0, .err = true };
+        return .{ .bytes = 0, .err = true, .printable = false };
     };
     defer queue.deinit();
 
     const initial_path = dupePathZ(allocator, path) catch {
         writeErr(path, "out of memory");
-        return .{ .bytes = 0, .err = true };
+        return .{ .bytes = 0, .err = true, .printable = false };
     };
     const initial_item = WorkItem{ .path = initial_path, .dev = dev };
     var initial_batch: [1]WorkItem = .{initial_item};
@@ -971,9 +997,8 @@ pub fn main(init: std.process.Init) u8 {
 
     for (targets.items) |t| {
         const r = scanTarget(allocator, t, &opts, &files);
-        if (r.err) {
-            exit_code = 1;
-        } else {
+        if (r.err) exit_code = 1;
+        if (r.printable) {
             printResult(r.bytes, t, &opts);
             grand_total += r.bytes;
         }
@@ -1017,7 +1042,11 @@ test "joinPath" {
 
     const p2 = try joinPath(allocator, "foo/", "bar");
     defer p2.deinit(allocator);
-    try std.testing.expectEqualStrings("foo/bar", p2.slice());
+    try std.testing.expectEqualStrings("foo//bar", p2.slice());
+
+    const p3 = try joinPath(allocator, "/", "usr");
+    defer p3.deinit(allocator);
+    try std.testing.expectEqualStrings("/usr", p3.slice());
 }
 
 test "inodeset dedup" {
@@ -1065,4 +1094,39 @@ test "queue push and pop" {
     q.taskDone();
 
     try std.testing.expect(q.pop() == null);
+}
+
+test "a directory that vanishes before it is opened is reported and not counted" {
+    const allocator = std.testing.allocator;
+    var queue = try WorkQueue.init(allocator, 16);
+    defer queue.deinit();
+    var files = InodeSet.init(allocator);
+    defer files.deinit();
+    var dirs = InodeSet.init(allocator);
+    defer dirs.deinit();
+    const opts = Options{ .apparent = true };
+    var total_bytes = std.atomic.Value(i64).init(1024);
+    var had_error = std.atomic.Value(bool).init(false);
+    var batch: [1]WorkItem = .{.{ .path = try dupePathZ(allocator, "/nonexistent-dush-test/gone"), .dev = 0, .size = 512 }};
+    queue.pushBatch(&batch);
+    var ctx = WorkerContext{
+        .allocator = allocator,
+        .queue = &queue,
+        .files = &files,
+        .dirs = &dirs,
+        .opts = &opts,
+        .total_bytes = &total_bytes,
+        .had_error = &had_error,
+    };
+    const saved_stderr = dup(std.posix.STDERR_FILENO);
+    try std.testing.expect(saved_stderr >= 0);
+    const devnull = open("/dev/null", 0x0001);
+    try std.testing.expect(devnull >= 0);
+    _ = dup2(devnull, std.posix.STDERR_FILENO);
+    _ = close(devnull);
+    workerFn(&ctx);
+    _ = dup2(saved_stderr, std.posix.STDERR_FILENO);
+    _ = close(saved_stderr);
+    try std.testing.expectEqual(@as(i64, 512), total_bytes.load(.monotonic));
+    try std.testing.expect(had_error.load(.monotonic));
 }

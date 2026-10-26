@@ -31,6 +31,7 @@ GNU coreutils 9.12 (`gdu -sh`) took 457.0 ms (453.2 … 466.9 ms) on that same t
 - **Work-stealing concurrency** — Traverses directory trees with thread-local stacks and byte accumulators. On Apple Silicon the default is the performance-core count; `-t` sets the worker count explicitly.
 - **Zero-allocation traversal** — Processes file metadata directly in-place from the kernel bulk buffer without heap-allocating path strings.
 - **Hardlink deduplication** — Accurately tracks multi-link inodes (`st_nlink > 1`) so hardlinks are counted exactly once.
+- **`du`-style errors** — Entries that cannot be read are reported on stderr in the same format as `du`, left out of the size, and the walk continues; the total still prints and the exit status is 1.
 
 ## Installation
 
@@ -85,10 +86,14 @@ $ dush -c src bench tests
 `dush` is tested against BSD `du -sh` for 100% numerical and formatting parity:
 
 ```sh
-just test   # Same checks as CI: comment ban, Zig tests, frozen du suite, freeze check, README check
+just test   # Same checks as CI: comment ban, Zig tests, frozen du suite, freeze check, README check, ported BSD and GNU du suites, upstream du suites
 make bench  # Runs hermetic hyperfine benchmark suite (uses native Zig generator)
 ```
 
+`upstream/` holds the FreeBSD, Apple and GNU coreutils `du` test scripts copied verbatim. `just upstream-bsd` runs the ATF scripts under kyua and `just upstream-gnu` runs the coreutils scripts with their own harness, both with `du` resolving to `dush`; see [upstream/README.md](upstream/README.md).
+
 ## License
 
-[MIT](LICENSE) © 2026 Akshey Deokule
+Copyright (C) 2026 Akshey Deokule. Licensed under the [GNU General Public License v3.0 or later](LICENSE) (`GPL-3.0-or-later`).
+
+The vendored test scripts in `upstream/` keep their own licenses: the FreeBSD and Apple scripts are BSD-2-Clause, and the GNU coreutils tests are GPL-3.0-or-later.
