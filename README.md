@@ -86,10 +86,14 @@ $ dush -c src bench tests
 `dush` is tested against BSD `du -sh` for 100% numerical and formatting parity:
 
 ```sh
-just test   # Same checks as CI: comment ban, Zig tests, frozen du suite, freeze check, README check, ported BSD and GNU du suites
+just test   # Same checks as CI: comment ban, Zig tests, frozen du suite, freeze check, README check, ported BSD and GNU du suites, upstream du suites
 make bench  # Runs hermetic hyperfine benchmark suite (uses native Zig generator)
 ```
 
+`upstream/` holds the FreeBSD, Apple and GNU coreutils `du` test scripts copied verbatim. `just upstream-bsd` runs the ATF scripts under kyua and `just upstream-gnu` runs the coreutils scripts with their own harness, both with `du` resolving to `dush`; see [upstream/README.md](upstream/README.md).
+
 ## License
 
-[MIT](LICENSE) © 2026 Akshey Deokule
+Copyright (C) 2026 Akshey Deokule. Licensed under the [GNU General Public License v3.0 or later](LICENSE) (`GPL-3.0-or-later`).
+
+The vendored test scripts in `upstream/` keep their own licenses: the FreeBSD and Apple scripts are BSD-2-Clause, and the GNU coreutils tests are GPL-3.0-or-later.

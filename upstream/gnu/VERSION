@@ -1,0 +1,4 @@
+coreutils 9.12
+source: https://ftp.gnu.org/gnu/coreutils/coreutils-9.12.tar.xz
+sha256: a480198559733e9b3da999e90543ac6f888a2caa544d8d664c5a1f17e528e210
+files: init.cfg, COPYING, tests/{init.sh,lang-default,envvar-check,other-fs-tmpdir,Coreutils.pm,CuSkip.pm,CuTmpdir.pm}, tests/du/*

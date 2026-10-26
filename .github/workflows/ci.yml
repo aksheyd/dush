@@ -20,6 +20,9 @@ jobs:
 
       - uses: extractions/setup-just@v4
 
+      - name: brew install atf kyua coreutils
+        run: brew install atf kyua coreutils
+
       - name: just checks
         run: just checks
 
@@ -30,3 +33,11 @@ jobs:
       - name: just frozen-gnu
         if: ${{ !cancelled() }}
         run: just frozen-gnu
+
+      - name: just upstream-bsd
+        if: ${{ !cancelled() }}
+        run: just upstream-bsd
+
+      - name: just upstream-gnu
+        if: ${{ !cancelled() }}
+        run: just upstream-gnu
