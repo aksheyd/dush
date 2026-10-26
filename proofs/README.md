@@ -129,9 +129,15 @@ These links between the model and `src/` are checked by tests, not proven:
     runs through the real `InodeSet.chargeFile`, sequentially per operand, compared with
     `opTotals` and the `-c` total. It then runs again with 1, 2, 4, and 8 threads sharing one
     `InodeSet` and an atomic total, compared with the Lean total.
-- That the Lean `humanize` and the unit model agree with macOS `/usr/bin/du`. This was checked
-  by hand on macOS (the `BLOCKSIZE` and `du -c a a a` cases above) and is covered more broadly by
-  the parity, frozen, and upstream suites in `tests/`.
+- That the Lean `humanize` and the unit model agree with macOS `/usr/bin/du`. This is not
+  proven, because the model transcribes `humanize_number` rather than deriving it from libc. It
+  was checked once on macOS:
+  - `du -A -h` on sparse files gave the golden string for all 144 golden vectors that are
+    multiples of 512 and that APFS could create (up to 2^54 bytes);
+  - the `BLOCKSIZE` and `du -c a a a` cases above were also checked.
+
+  The parity, frozen, and upstream suites in `tests/` cover this more broadly. None of these
+  checks is part of `just proof`.
 - That the Zig `i64` arithmetic matches the Lean natural-number arithmetic. The vectors stay
   below `2^63`, and the bridge exercises values near that limit. Overflow is not proven absent.
 
