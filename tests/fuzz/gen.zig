@@ -119,7 +119,7 @@ pub const Gen = struct {
         const dir = if (to_sym) std.fs.path.dirname(src) orelse "" else g.dirFor();
         const p = try g.join(dir, try g.name());
         try g.ops.append(g.a, .{ .kind = .hard, .path = p, .target = src });
-        try g.files.append(g.a, p);
+        try (if (to_sym) &g.syms else &g.files).append(g.a, p);
     }
 
     fn addSym(g: *Gen) !void {
