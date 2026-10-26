@@ -45,6 +45,7 @@ freeze-check:
     zig run tools/freeze.zig
 
 readme-check:
+    zig test tools/readme.zig
     zig run tools/readme.zig -- check
 
 bench-compare base="origin/main" *trees="":
