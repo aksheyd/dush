@@ -90,10 +90,28 @@ just test   # Same checks as CI: comment ban, Zig tests, frozen du suite, freeze
 make bench  # Runs hermetic hyperfine benchmark suite (uses native Zig generator)
 ```
 
-`upstream/` holds the FreeBSD, Apple and GNU coreutils `du` test scripts copied verbatim. `just upstream-bsd` runs the ATF scripts under kyua and `just upstream-gnu` runs the coreutils scripts with their own harness, both with `du` resolving to `dush`; see [upstream/README.md](upstream/README.md).
+`tests/upstream/` holds the FreeBSD, Apple and GNU coreutils `du` test scripts copied verbatim. `just upstream-bsd` runs the ATF scripts under kyua and `just upstream-gnu` runs the coreutils scripts with their own harness, both with `du` resolving to `dush`; see [tests/upstream/README.md](tests/upstream/README.md).
+
+### Layout
+
+| Path | Contents |
+| :--- | :--- |
+| `src/main.zig` | Entry point: parse, scan each operand, print |
+| `src/cli.zig` | Options, argument parsing, usage, default thread count |
+| `src/walk.zig` | Parallel `getattrlistbulk` walker with a `readdir`/`fstatat` fallback |
+| `src/accounting.zig` | Pure size math: 512-byte rounding, block conversion |
+| `src/inodes.zig` | Thread-safe `(dev, ino)` set for hard-link dedup |
+| `src/format.zig` | BSD `humanize_number` clone and output lines |
+| `src/errors.zig`, `src/path.zig`, `src/sys.zig` | Diagnostics, path joining, libc and Darwin bindings |
+| `tests/unit/` | Zig unit tests against the `src/` modules |
+| `tests/parity/` | Black-box parity tests of the built binary against `/usr/bin/du` |
+| `tests/frozen/` | Frozen Zig ports of the BSD and GNU `du` suites; edits need `ALLOW-FROZEN-EDIT` |
+| `tests/upstream/` | Upstream `du` test scripts, verbatim and frozen |
+| `bench/` | Hyperfine benchmark, fixture generator, recorded results |
+| `tools/` | Comment ban, freeze check, README renderer, upstream suite runners |
 
 ## License
 
 Copyright (C) 2026 Akshey Deokule. Licensed under the [GNU General Public License v3.0 or later](LICENSE) (`GPL-3.0-or-later`).
 
-The vendored test scripts in `upstream/` keep their own licenses: the FreeBSD and Apple scripts are BSD-2-Clause, and the GNU coreutils tests are GPL-3.0-or-later.
+The vendored test scripts in `tests/upstream/` keep their own licenses: the FreeBSD and Apple scripts are BSD-2-Clause, and the GNU coreutils tests are GPL-3.0-or-later.

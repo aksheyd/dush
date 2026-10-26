@@ -2,7 +2,7 @@
 set -u
 dush=${DUSH_BIN:?set DUSH_BIN to the du binary under test}
 root=$(cd "$(dirname "$0")/.." && pwd)
-gnu=$root/upstream/gnu
+gnu=$root/tests/upstream/gnu
 version=$(sed -n 's/^coreutils \([0-9.]*\).*/\1/p' "$gnu/VERSION")
 gnubin=${GNUBIN:-$(brew --prefix coreutils 2> /dev/null)/libexec/gnubin}
 test -x "$gnubin/stat" || { echo "upstream-gnu: GNU coreutils not found at $gnubin; brew install coreutils or set GNUBIN" >&2; exit 2; }
@@ -20,7 +20,7 @@ mkdir -p "$stage/src" "$work/logs"
 cp "$gnu/init.cfg" "$stage/init.cfg"
 ln -sfn "$gnu/tests" "$stage/tests"
 ln -sf "$dush" "$stage/src/du"
-ln -sf "$root/check/getlimits.pl" "$stage/src/getlimits"
+ln -sf "$root/tools/getlimits.pl" "$stage/src/getlimits"
 printf '#define HAVE_OPENAT 1\n' > "$stage/config.h"
 built=$(ls "$gnubin" | tr '\n' ' ')
 echo "upstream-gnu: du is $dush; coreutils $version tests; other tools from $gnubin"
