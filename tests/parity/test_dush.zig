@@ -43,6 +43,18 @@ fn runCmd(allocator: std.mem.Allocator, argv: []const []const u8) !RunOutput {
     };
 }
 
+fn runIn(allocator: std.mem.Allocator, argv: []const []const u8, cwd: []const u8) !RunOutput {
+    const res = try std.process.run(allocator, std.testing.io, .{
+        .argv = argv,
+        .cwd = .{ .path = cwd },
+    });
+    return .{
+        .term = res.term,
+        .stdout = res.stdout,
+        .stderr = res.stderr,
+    };
+}
+
 fn normalizeOutput(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     var list: std.ArrayListUnmanaged(u8) = .empty;
     defer list.deinit(allocator);
@@ -74,16 +86,28 @@ fn assertOutputParity(allocator: std.mem.Allocator, dush_out: []const u8, du_out
 
 test "parity: default dot" {
     const allocator = std.testing.allocator;
-    const dush_bin = getDushBin();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try sizedTree(io, tmp.dir, &.{ "dd/ff", "dd/ee/gg" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "big", .data = "y" ** 300000 });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = buf[0..try tmp.dir.realPath(io, &buf)];
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var here = try std.Io.Dir.cwd().openDir(io, ".", .{});
+    defer here.close(io);
+    const cwd = cwd_buf[0..try here.realPath(io, &cwd_buf)];
+    const dush_bin = try std.fs.path.resolve(allocator, &.{ cwd, getDushBin() });
+    defer allocator.free(dush_bin);
 
-    const r1 = try runCmd(allocator, &.{ dush_bin });
+    const r1 = try runIn(allocator, &.{dush_bin}, root);
     defer r1.deinit(allocator);
-    const r2 = try runCmd(allocator, &.{ "du", "-sh" });
+    const r2 = try runIn(allocator, &.{ "du", "-sh" }, root);
     defer r2.deinit(allocator);
 
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r1.term);
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r2.term);
-    try assertOutputParity(allocator, r1.stdout, r2.stdout);
+    try std.testing.expectEqualStrings(r2.stdout, r1.stdout);
 }
 
 test "parity: single directory" {
