@@ -12,7 +12,7 @@ just test
 
 `just test` is what CI runs on macOS. It must pass with no edits to the suites:
 
-- `just checks`: no full-line comments in our own code, Zig unit and parity
+- `just checks`: no comments in our own code, Zig unit and parity
   tests, the frozen `du` totals suite, the freeze check and the README check.
 - `just frozen`: the Zig ports of the BSD and GNU `du` suites (`tests/frozen/`).
 - `just upstream`: the FreeBSD, Apple and GNU coreutils `du` scripts run
@@ -56,8 +56,9 @@ README table is common-case only; refresh it with `just record-bench`.
 
 ## Style
 
-- No full-line comments in `.zig`, `.sh`, workflow, `Makefile` or `justfile`
-  files; trailing comments are fine.
+- No comments at all, full-line or trailing, in `.zig`, `.sh`, `.pl`, `.py`,
+  workflow, `Makefile`, `justfile` or `.tape` files. Only the frozen verbatim
+  suites in `tests/frozen/` and `tests/upstream/` are exempt.
 - `dush` invoked as `du` must stay byte-for-byte `/usr/bin/du`. As `dush`, only
   the documented defaults (`-s`, `-h`, the `dush:` prefix, `--threads`) differ.
 - Change `README.md` whenever `src/` changes; the README check enforces it.

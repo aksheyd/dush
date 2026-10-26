@@ -8,14 +8,14 @@ fn exeMod(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin
         .link_libc = true,
     });
     if (target.result.os.tag.isDarwin()) {
-        if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) }); // a non-native target skips SDK detection
+        if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
         mod.linkSystemLibrary("util", .{});
     }
     return mod;
 }
 
 pub fn build(b: *std.Build) void {
-    const macos_11: std.Target.Query = .{ .os_tag = .macos, .os_version_min = .{ .semver = .{ .major = 11, .minor = 0, .patch = 0 } } }; // match /usr/bin/du: libc fts keeps d//1 only for minos < 26
+    const macos_11: std.Target.Query = .{ .os_tag = .macos, .os_version_min = .{ .semver = .{ .major = 11, .minor = 0, .patch = 0 } } };
     const target = b.standardTargetOptions(.{ .default_target = if (b.graph.host.result.os.tag == .macos) macos_11 else .{} });
     const optimize = b.standardOptimizeOption(.{});
 
@@ -56,6 +56,6 @@ pub fn build(b: *std.Build) void {
     const run_bench = b.addSystemCommand(&.{ "sh", "bench/bench.sh" });
     run_bench.addArtifactArg(rel_exe);
     run_bench.addArtifactArg(gen_fixture);
-    if (b.args) |args| run_bench.addArgs(args); // `zig build bench -- --cold`
+    if (b.args) |args| run_bench.addArgs(args);
     bench_step.dependOn(&run_bench.step);
 }

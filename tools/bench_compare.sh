@@ -15,7 +15,7 @@ mkdir -p "$out"
 wt=$(mktemp -d "${TMPDIR:-/tmp}/dush-bench-base.XXXXXX")
 trap 'git -C "$root" worktree remove --force "$wt" >/dev/null 2>&1 || true' EXIT
 git -C "$root" worktree add --detach --force "$wt" "$base" >/dev/null 2>&1
-(cd "$wt" && zig build -Doptimize=ReleaseFast >/dev/null) # base builds with its own build.zig
+(cd "$wt" && zig build -Doptimize=ReleaseFast >/dev/null)
 cp "$wt/zig-out/bin/dush" "$out/dush-base"
 (cd "$root" && zig build -Doptimize=ReleaseFast >/dev/null)
 cp "$root/zig-out/bin/dush" "$out/dush-head"
@@ -24,7 +24,7 @@ for tree in "$@"; do
     : > "$out/means.tsv"
     r=1
     while [ $r -le "$rounds" ]; do
-        if [ $((r % 2)) -eq 1 ]; then first=base; second=head; else first=head; second=base; fi # alternate order so drift hits both
+        if [ $((r % 2)) -eq 1 ]; then first=base; second=head; else first=head; second=base; fi
         hyperfine --warmup 3 --shell none --runs "$runs" --export-csv "$out/round.csv" \
             --command-name "$first" "$out/dush-$first $tree" \
             --command-name "$second" "$out/dush-$second $tree" >/dev/null

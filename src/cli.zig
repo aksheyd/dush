@@ -253,7 +253,7 @@ pub fn parse(allocator: std.mem.Allocator, argv: []?[*:0]u8, mode: Mode) !ParseR
         }
     }
 
-    if (mode == .dush and bflag and !units_given) units = .blocks; // explicit -B beats dush's implicit -h
+    if (mode == .dush and bflag and !units_given) units = .blocks;
     if (mode == .dush and !aflag and !dflag and !sflag) sflag = true;
     if (@as(u8, @intFromBool(aflag)) + @intFromBool(dflag) + @intFromBool(sflag) > 1) usage(mode);
     if (sflag) cfg.depth = 0;

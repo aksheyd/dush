@@ -1,4 +1,4 @@
-du_env := "env -u BLOCKSIZE -u BLOCK_SIZE -u DU_BLOCK_SIZE -u POSIXLY_CORRECT COMMAND_MODE=legacy LC_ALL=C" # the env the frozen harnesses give /usr/bin/du, so dush sees the same
+du_env := "env -u BLOCKSIZE -u BLOCK_SIZE -u DU_BLOCK_SIZE -u POSIXLY_CORRECT COMMAND_MODE=legacy LC_ALL=C"
 
 test: checks frozen upstream
 
@@ -9,6 +9,7 @@ frozen: frozen-bsd frozen-gnu
 upstream: upstream-bsd upstream-gnu
 
 no-comments:
+    zig test tools/comments.zig
     zig run tools/comments.zig
 
 zig-test:
