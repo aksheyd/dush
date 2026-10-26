@@ -14,7 +14,7 @@ status=0
 for suite in freebsd apple; do
   dir=$work/$suite
   mkdir "$dir"
-  { printf '#! %s\n' "$atf_sh"; cat "$root/upstream/$suite/du_test.sh"; } > "$dir/du_test"
+  { printf '#! %s\n' "$atf_sh"; cat "$root/tests/upstream/$suite/du_test.sh"; } > "$dir/du_test"
   chmod +x "$dir/du_test"
   printf 'syntax(2)\ntest_suite("dush-upstream-%s")\natf_test_program{name="du_test"}\n' "$suite" > "$dir/Kyuafile"
   echo "== $suite =="

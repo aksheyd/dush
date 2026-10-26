@@ -48,11 +48,11 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
     if (!std.mem.eql(u8, rendered, readme)) {
-        std.debug.print("readme: the benchmark section does not match {s}; run `zig run bench/readme.zig -- render`\n", .{results_path});
+        std.debug.print("readme: the benchmark section does not match {s}; run `zig run tools/readme.zig -- render`\n", .{results_path});
         return 1;
     }
     if (try mainChangedWithoutReadme(alloc, io, init.environ_map)) {
-        std.debug.print("readme: src/main.zig changed against the base but README.md did not\n", .{});
+        std.debug.print("readme: src/ changed against the base but README.md did not\n", .{});
         return 1;
     }
     std.debug.print("readme: ok\n", .{});
@@ -127,10 +127,18 @@ fn firstToken(text: []const u8) []const u8 {
 
 fn mainChangedWithoutReadme(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !bool {
     const base = try std.fmt.allocPrint(alloc, "origin/{s}...HEAD", .{env.get("GITHUB_BASE_REF") orelse "main"});
-    const committed = try git(alloc, io, &.{ "git", "diff", "--name-only", base, "--", "src/main.zig", readme_path });
-    const uncommitted = try git(alloc, io, &.{ "git", "diff", "--name-only", "HEAD", "--", "src/main.zig", readme_path });
+    const committed = try git(alloc, io, &.{ "git", "diff", "--name-only", base, "--", "src", readme_path });
+    const uncommitted = try git(alloc, io, &.{ "git", "diff", "--name-only", "HEAD", "--", "src", readme_path });
     const changed = try std.mem.concat(alloc, u8, &.{ committed, uncommitted });
-    return hasLine(changed, "src/main.zig") and !hasLine(changed, readme_path);
+    return hasSrcLine(changed) and !hasLine(changed, readme_path);
+}
+
+fn hasSrcLine(text: []const u8) bool {
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |l| {
+        if (std.mem.startsWith(u8, l, "src/")) return true;
+    }
+    return false;
 }
 
 fn hasLine(text: []const u8, line: []const u8) bool {

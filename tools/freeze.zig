@@ -14,7 +14,7 @@ pub fn main(init: std.process.Init) !u8 {
     const base_ref = env.get("GITHUB_BASE_REF") orelse return error.MissingBaseRef;
     const base = try std.fmt.allocPrint(alloc, "origin/{s}", .{base_ref});
     const range = try std.fmt.allocPrint(alloc, "{s}...HEAD", .{base});
-    const edited = try git(alloc, io, &.{ "git", "diff", "--name-only", "--no-renames", "--diff-filter=a", range, "--", "frozen" });
+    const edited = try git(alloc, io, &.{ "git", "diff", "--name-only", "--no-renames", "--diff-filter=a", range, "--", "tests/frozen", "tests/upstream" });
     if (edited.len == 0) {
         std.debug.print("freeze: no edits to existing frozen files\n", .{});
         return 0;

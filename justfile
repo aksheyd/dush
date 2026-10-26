@@ -7,36 +7,36 @@ frozen: frozen-bsd frozen-gnu
 upstream: upstream-bsd upstream-gnu
 
 no-comments:
-    zig run check/comments.zig
+    zig run tools/comments.zig
 
 zig-test:
     make test
 
 du-suite:
-    zig test frozen/suite.zig
+    zig test tests/frozen/suite.zig
 
 frozen-bsd:
     make dush
-    DUSH_BIN="$PWD/dush" zig test frozen/bsd/du_test.zig
+    DUSH_BIN="$PWD/dush" zig test tests/frozen/bsd/du_test.zig
 
 frozen-gnu:
     make dush
-    DUSH_BIN="$PWD/dush" zig test frozen/gnu/all.zig
+    DUSH_BIN="$PWD/dush" zig test tests/frozen/gnu/all.zig
 
 upstream-bsd:
     make dush
-    DUSH_BIN="${DUSH_BIN:-$PWD/dush}" sh check/upstream_bsd.sh
+    DUSH_BIN="${DUSH_BIN:-$PWD/dush}" sh tools/upstream_bsd.sh
 
 upstream-gnu:
     make dush
-    DUSH_BIN="${DUSH_BIN:-$PWD/dush}" sh check/upstream_gnu.sh
+    DUSH_BIN="${DUSH_BIN:-$PWD/dush}" sh tools/upstream_gnu.sh
 
 freeze-check:
-    zig run frozen/freeze.zig
+    zig run tools/freeze.zig
 
 readme-check:
-    zig run bench/readme.zig -- check
+    zig run tools/readme.zig -- check
 
 record-bench:
     make bench
-    zig run bench/readme.zig -- record
+    zig run tools/readme.zig -- record

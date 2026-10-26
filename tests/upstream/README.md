@@ -2,7 +2,7 @@
 
 Test scripts copied verbatim, license headers intact, from the projects whose
 `du` dush aims to match. Nothing in this directory is edited; the runners in
-`check/` adapt the environment instead. The comment ban skips this directory.
+`tools/` adapt the environment instead. The comment ban skips this directory.
 
 | Directory | Source | Pin | License |
 | :--- | :--- | :--- | :--- |
@@ -23,7 +23,7 @@ coreutils' `TESTS_ENVIRONMENT`, and runs each `.sh` with `/bin/sh` and the
 `.pl` with coreutils' perl options. It reports PASS, FAIL, SKIP or ERROR per
 script. The other tools the scripts call (`stat`, `truncate`, `seq`, ...) come
 from Homebrew's GNU coreutils (`brew install coreutils`), as they would from the
-coreutils build tree. `src/getlimits` is `check/getlimits.pl`, a small stand-in
+coreutils build tree. `src/getlimits` is `tools/getlimits.pl`, a small stand-in
 for coreutils' unbuilt `getlimits` helper that prints the integer limits and
 errno strings the scripts read.
 

@@ -13,7 +13,7 @@ endif
 
 all: $(TARGET)
 
-$(TARGET): build.zig build.zig.zon src/main.zig
+$(TARGET): build.zig build.zig.zon $(wildcard src/*.zig)
 	$(ZIG) build -Doptimize=ReleaseFast
 	cp zig-out/bin/dush $(TARGET)
 

@@ -19,13 +19,15 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    const unit_mod = exeMod(b, target, optimize, "tests/unit/unit_test.zig");
+    unit_mod.addImport("dush", exeMod(b, target, optimize, "src/root.zig"));
     const unit_tests = b.addTest(.{
-        .root_module = exeMod(b, target, optimize, "src/main.zig"),
+        .root_module = unit_mod,
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     const parity_tests = b.addTest(.{
-        .root_module = exeMod(b, target, optimize, "tests/test_dush.zig"),
+        .root_module = exeMod(b, target, optimize, "tests/parity/test_dush.zig"),
     });
     const run_parity_tests = b.addRunArtifact(parity_tests);
     run_parity_tests.step.dependOn(&b.addInstallArtifact(exe, .{}).step);
