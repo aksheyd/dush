@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Lang = enum { zig, hash, yaml };
+
 pub fn main(init: std.process.Init) !u8 {
     const alloc = init.arena.allocator();
     const io = init.io;
@@ -9,37 +11,117 @@ pub fn main(init: std.process.Init) !u8 {
     defer walker.deinit();
     var bad: usize = 0;
     while (try walker.next(io)) |entry| {
-        if (entry.kind == .directory and !skipped(entry.basename)) try walker.enter(io, entry);
+        if (entry.kind == .directory and !skipped(entry.path)) try walker.enter(io, entry);
         if (entry.kind != .file) continue;
-        const marker = commentMarker(entry.path) orelse continue;
+        const lang = langFor(entry.path) orelse continue;
         const text = try dir.readFileAlloc(io, entry.path, alloc, .limited(8 * 1024 * 1024));
-        var lines = std.mem.splitScalar(u8, text, '\n');
-        var number: usize = 1;
-        while (lines.next()) |line| : (number += 1) {
-            const trimmed = std.mem.trimStart(u8, line, " \t");
-            if (!std.mem.startsWith(u8, trimmed, marker)) continue;
-            if (number == 1 and std.mem.startsWith(u8, trimmed, "#!")) continue;
-            std.debug.print("{s}:{d}: full-line comment\n", .{ entry.path, number });
-            bad += 1;
-        }
+        bad += report(entry.path, lang, text);
     }
     if (bad != 0) return 1;
     std.debug.print("comments: none\n", .{});
     return 0;
 }
 
-fn skipped(name: []const u8) bool {
-    for ([_][]const u8{ ".git", "zig-out", ".zig-cache", ".bench", "upstream" }) |skip| {
-        if (std.mem.eql(u8, name, skip)) return true;
+fn report(path: []const u8, lang: Lang, text: []const u8) usize {
+    var bad: usize = 0;
+    var quote: u8 = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var number: usize = 1;
+    while (lines.next()) |line| : (number += 1) {
+        if (number == 1 and std.mem.startsWith(u8, line, "#!")) continue;
+        if (lang == .yaml) quote = 0;
+        const col = switch (lang) {
+            .zig => zigComment(line),
+            .hash, .yaml => hashComment(line, &quote),
+        } orelse continue;
+        const kind = if (std.mem.trim(u8, line[0..col], " \t").len == 0) "full-line" else "trailing";
+        std.debug.print("{s}:{d}: {s} comment\n", .{ path, number, kind });
+        bad += 1;
+    }
+    return bad;
+}
+
+pub fn zigComment(line: []const u8) ?usize {
+    if (std.mem.startsWith(u8, std.mem.trimStart(u8, line, " \t"), "\\\\")) return null;
+    var quote: u8 = 0;
+    var i: usize = 0;
+    while (i < line.len) : (i += 1) {
+        const c = line[i];
+        if (quote != 0) {
+            if (c == '\\') i += 1 else if (c == quote) quote = 0;
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            quote = c;
+        } else if (c == '/' and i + 1 < line.len and line[i + 1] == '/') {
+            return i;
+        }
+    }
+    return null;
+}
+
+pub fn hashComment(line: []const u8, quote: *u8) ?usize {
+    var i: usize = 0;
+    while (i < line.len) : (i += 1) {
+        const c = line[i];
+        if (quote.* != 0) {
+            if (c == '\\' and quote.* == '"') i += 1 else if (c == quote.*) quote.* = 0;
+            continue;
+        }
+        switch (c) {
+            '\\' => i += 1,
+            '"', '\'' => if (opensQuote(line, i)) {
+                quote.* = c;
+            },
+            '#' => if (i == 0 or wordBreak(line[i - 1])) return i,
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn opensQuote(line: []const u8, i: usize) bool {
+    if (i == 0) return true;
+    return !std.ascii.isAlphanumeric(line[i - 1]);
+}
+
+fn wordBreak(c: u8) bool {
+    return switch (c) {
+        ' ', '\t', ';', '|', '&', '(', ')' => true,
+        else => false,
+    };
+}
+
+fn skipped(path: []const u8) bool {
+    for ([_][]const u8{ ".git", "zig-out", ".zig-cache", ".bench", "tests/frozen", "tests/upstream", "fuzz-failures" }) |skip| {
+        if (std.mem.eql(u8, path, skip)) return true;
     }
     return false;
 }
 
-fn commentMarker(path: []const u8) ?[]const u8 {
-    if (std.mem.endsWith(u8, path, ".zig")) return "//";
-    if (std.mem.endsWith(u8, path, ".sh")) return "#";
-    if (std.mem.startsWith(u8, path, ".github/workflows/")) return "#";
+fn langFor(path: []const u8) ?Lang {
     const base = std.fs.path.basename(path);
-    if (std.mem.eql(u8, base, "Makefile") or std.mem.eql(u8, base, "justfile")) return "#";
+    if (std.mem.endsWith(u8, base, ".zig") or std.mem.eql(u8, base, "build.zig.zon")) return .zig;
+    if (std.mem.endsWith(u8, base, ".yml") or std.mem.endsWith(u8, base, ".yaml")) return .yaml;
+    for ([_][]const u8{ ".sh", ".pl", ".py", ".tape" }) |ext| {
+        if (std.mem.endsWith(u8, base, ext)) return .hash;
+    }
+    for ([_][]const u8{ "Makefile", "justfile", ".gitignore" }) |name| {
+        if (std.mem.eql(u8, base, name)) return .hash;
+    }
     return null;
+}
+
+test "trailing and full-line comments are both found" {
+    try std.testing.expectEqual(@as(?usize, 0), zigComment("// x"));
+    try std.testing.expectEqual(@as(?usize, 7), zigComment("a = 1; // x"));
+    try std.testing.expectEqual(@as(?usize, null), zigComment("s = \"//x\";"));
+    try std.testing.expectEqual(@as(?usize, null), zigComment("c = '\"'; s = \"a//\";"));
+    try std.testing.expectEqual(@as(?usize, null), zigComment("    \\\\ // text"));
+    var q: u8 = 0;
+    try std.testing.expectEqual(@as(?usize, 5), hashComment("echo # x", &q));
+    try std.testing.expectEqual(@as(?usize, null), hashComment("echo $# ${#a} \"#\" '#' a#b", &q));
+    try std.testing.expectEqual(@as(?usize, null), hashComment("awk '", &q));
+    try std.testing.expectEqual(@as(?usize, null), hashComment("  # inside quotes", &q));
+    try std.testing.expectEqual(@as(?usize, 4), hashComment("' x # y", &q));
 }

@@ -789,3 +789,105 @@ test "parity: deep directory hierarchy" {
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r2.term);
     try assertOutputParity(allocator, r1.stdout, r2.stdout);
 }
+
+test "parity: errors from a summary walk come out in du's order" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dush_bin = getDushBin();
+
+    var tmp = std.testing.tmpDir(.{});
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(io, &root_buf)];
+    var names: std.ArrayListUnmanaged([:0]u8) = .empty;
+    defer {
+        for (names.items) |n| {
+            _ = chmod(n, 0o755);
+            allocator.free(n);
+        }
+        names.deinit(allocator);
+        tmp.cleanup();
+    }
+    for (0..6) |i| {
+        for (0..5) |j| {
+            var rel_buf: [64]u8 = undefined;
+            const rel = try std.fmt.bufPrint(&rel_buf, "p{d}/w{d}/q{d}", .{ i, j, j });
+            try tmp.dir.createDirPath(io, rel);
+            var file_buf: [80]u8 = undefined;
+            try tmp.dir.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&file_buf, "{s}/f", .{rel}), .data = "x" ** 5000 });
+            try names.append(allocator, try std.fmt.allocPrintSentinel(allocator, "{s}/{s}", .{ root, rel }, 0));
+        }
+    }
+    for (names.items) |n| try std.testing.expectEqual(@as(c_int, 0), chmod(n, 0o000));
+
+    for (0..5) |_| {
+        const r1 = try runCmd(allocator, &.{ dush_bin, "-k", root });
+        defer r1.deinit(allocator);
+        const r2 = try runCmd(allocator, &.{ "du", "-sk", root });
+        defer r2.deinit(allocator);
+        try std.testing.expectEqual(r2.term, r1.term);
+        try assertOutputParity(allocator, r1.stdout, r2.stdout);
+        const got = try std.mem.replaceOwned(u8, allocator, r1.stderr, "dush: ", "du: ");
+        defer allocator.free(got);
+        try std.testing.expectEqualStrings(r2.stderr, got);
+    }
+}
+
+fn assertExactParity(allocator: std.mem.Allocator, dush_argv: []const []const u8, du_argv: []const []const u8) !void {
+    const r1 = try runCmd(allocator, dush_argv);
+    defer r1.deinit(allocator);
+    const r2 = try runCmd(allocator, du_argv);
+    defer r2.deinit(allocator);
+    try std.testing.expectEqual(r2.term, r1.term);
+    try std.testing.expectEqualStrings(r2.stdout, r1.stdout);
+    const got = try std.mem.replaceOwned(u8, allocator, r1.stderr, "dush: ", "du: ");
+    defer allocator.free(got);
+    try std.testing.expectEqualStrings(r2.stderr, got);
+}
+
+fn sizedTree(io: std.Io, dir: std.Io.Dir, names: []const []const u8) !void {
+    try dir.createDirPath(io, "dd/ee");
+    for (names) |n| try dir.writeFile(io, .{ .sub_path = n, .data = "x" ** 3000 });
+}
+
+test "parity: a negative threshold with -A and a scale prints no directory" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dush_bin = getDushBin();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try sizedTree(io, tmp.dir, &.{ "dd/ff", "dd/ee/gg" });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = buf[0..try tmp.dir.realPath(io, &buf)];
+    for ([_][]const u8{ "-k", "-m", "-g" }) |unit| {
+        for ([_][]const u8{ "-1", "-512", "-4096", "-1048576" }) |t| {
+            try assertExactParity(allocator, &.{ dush_bin, "-A", unit, "-t", t, root }, &.{ "du", "-s", "-A", unit, "-t", t, root });
+        }
+    }
+}
+
+test "parity: an empty operand is reported in place and the rest still walk" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dush_bin = getDushBin();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try sizedTree(io, tmp.dir, &.{ "dd/ff", "dd/ee/gg" });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = buf[0..try tmp.dir.realPath(io, &buf)];
+    try assertExactParity(allocator, &.{ dush_bin, "-k", "" }, &.{ "du", "-sk", "" });
+    try assertExactParity(allocator, &.{ dush_bin, "-k", "-c", root, "", "/nonexistent-dush-test", root }, &.{ "du", "-sk", "-c", root, "", "/nonexistent-dush-test", root });
+}
+
+test "parity: -I masks match in the caller's locale" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dush_bin = getDushBin();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try sizedTree(io, tmp.dir, &.{ "dd/\xc3\xa9", "dd/ee/gg", "dd/ab" });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = buf[0..try tmp.dir.realPath(io, &buf)];
+    for ([_][]const u8{ "LC_ALL=en_US.UTF-8", "LC_ALL=C" }) |env| {
+        try assertExactParity(allocator, &.{ "env", env, dush_bin, "-k", "-I", "?", root }, &.{ "env", env, "du", "-sk", "-I", "?", root });
+    }
+}

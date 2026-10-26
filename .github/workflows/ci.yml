@@ -34,6 +34,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: just frozen-gnu
 
+      - name: frozen-gnu log
+        if: ${{ failure() }}
+        run: cat zig-out/logs/frozen-gnu.log
+
       - name: just upstream-bsd
         if: ${{ !cancelled() }}
         run: just upstream-bsd

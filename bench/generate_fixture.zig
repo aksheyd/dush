@@ -54,7 +54,7 @@ pub fn main(init: std.process.Init) !u8 {
     const allocator = init.gpa;
     var it = init.minimal.args.iterate();
 
-    _ = it.next(); // skip exe name
+    _ = it.next();
     const dest = it.next() orelse ".bench/tree";
 
     var top_dirs: usize = 128;

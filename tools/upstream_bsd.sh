@@ -22,6 +22,8 @@ for suite in freebsd apple; do
   rc=$?
   cat "$dir/test.out"
   test -n "${UPSTREAM_VERBOSE:-}" && kyua --logfile="$dir/kyua.log" report --verbose --results-file="$dir/results.db" --results-filter=broken,failed | awk '/^===> Execution context/ { skip = 1; next } /^===> / { skip = 0 } !skip'
-  test $rc -eq 0 || status=1
+  test $rc -eq 0 || test $rc -eq 1 || status=1
+  sed -n 's/^du_test:\([^ ]*\)  ->  \([a-z_]*\).*/\2: \1/p' "$dir/test.out" | sed 's/^passed:/PASS:/; s/^failed:/FAIL:/; s/^skipped:/SKIP:/; s/^broken:/FAIL:/; s/^expected_failure:/XFAIL:/' > "$dir/results"
+  sh "$root/tools/baseline.sh" "$root/tests/upstream/$suite/EXPECTED" "$dir/results" || status=1
 done
 exit $status

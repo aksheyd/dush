@@ -1,0 +1,34 @@
+# Frozen GNU cases that differ by design: GNU-only options /usr/bin/du rejects too, or dush's default -s.
+# Format: RESULT<TAB>test<TAB>reason. Unlisted tests must PASS; just frozen-gnu fails on any deviation either way.
+FAIL	basic.test.gnu basic: nul line terminator [unsupported -0]	GNU -0 is not a BSD du option; /usr/bin/du rejects it too
+FAIL	basic.test.gnu basic: separate dirs [unsupported -S]	GNU -S is not a BSD du option; /usr/bin/du rejects it too
+SKIP	big_files.test.gnu 2g: dense file past 2 GiB [expensive: DUSH_GNU_EXPENSIVE=1]	expensive: set DUSH_GNU_EXPENSIVE=1 to run
+FAIL	bigtime.test.gnu bigtime: mtime column [unsupported --time]	GNU --time is not a BSD du option; /usr/bin/du rejects it too
+SKIP	bind_mount.test.gnu bind-mount-dir-cycle: dir bind-mounted inside itself [skipped: root + Linux mount --bind]	needs root and Linux mount --bind
+SKIP	bind_mount.test.gnu bind-mount-dir-cycle-v2: ancestor bind-mounted two levels down [skipped: root + Linux mount --bind]	needs root and Linux mount --bind
+SKIP	bind_mount.test.gnu move-dir-while-traversing: dir renamed mid-walk [skipped: Linux inotify race]	needs Linux inotify
+FAIL	deref.test.gnu deref-args: -D alias of -H [unsupported -D]	GNU -D is not a BSD du option; /usr/bin/du rejects it too
+FAIL	deref.test.gnu deref-args: per-directory listing [unsupported: no -s]	dush defaults to -s; the GNU per-directory listing needs du mode
+FAIL	exclude.test.gnu exclude: patterns from a file [unsupported --exclude-from]	GNU --exclude-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	exclude.test.gnu exclude: --exclude long form [unsupported --exclude]	GNU --exclude is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: extra operand is rejected [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: missing list file [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: list names missing files [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: duplicate names [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: duplicate names with -l [unsupported --files0-from -l]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: '-' named in a list read from stdin [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: empty regular list [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: empty non-regular list [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: one zero-length name [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: two zero-length names [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: one name without terminator [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: one name with terminator [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: same name twice without final terminator [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: same name twice with final terminator [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from: names after a zero-length name still count [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	files0_from.test.gnu files0-from-dir: list is a directory [unsupported --files0-from]	GNU --files0-from is not a BSD du option; /usr/bin/du rejects it too
+FAIL	inodes.test.gnu inodes: counts per state of d [unsupported --inodes]	GNU --inodes is not a BSD du option; /usr/bin/du rejects it too
+FAIL	inodes.test.gnu inodes: human count of 1024 [unsupported --inodes]	GNU --inodes is not a BSD du option; /usr/bin/du rejects it too
+FAIL	operands.test.gnu max-depth: --max-depth=2 long form [unsupported --max-depth]	GNU --max-depth is not a BSD du option; /usr/bin/du rejects it too
+FAIL	symlinks.test.gnu trailing-slash: per-directory listing [unsupported: no -s]	dush defaults to -s; the GNU per-directory listing needs du mode
+FAIL	threshold.test.gnu threshold: --threshold long form [unsupported --threshold]	GNU --threshold is not a BSD du option; /usr/bin/du rejects it too

@@ -1,0 +1,30 @@
+# Outcomes /usr/bin/du on macOS gets from GNU coreutils' tests/du. Unlisted tests must PASS.
+# Format: RESULT<TAB>test<TAB>reason. just upstream-gnu fails on any deviation either way.
+# Recorded by running tools/upstream_gnu.sh with DUSH_BIN=/usr/bin/du; dush's per-test logs matched byte for byte.
+SKIP	tests/du/2g.sh	very expensive, needs RUN_VERY_EXPENSIVE_TESTS=yes
+FAIL	tests/du/8gb.sh	GNU -b (apparent bytes) is not a BSD du option
+FAIL	tests/du/apparent.sh	GNU -b and --apparent-size are not BSD du options
+FAIL	tests/du/basic.sh	GNU -b is not a BSD du option
+SKIP	tests/du/bigtime.sh	APFS cannot represent the far-future timestamp the test needs
+SKIP	tests/du/bind-mount-dir-cycle-v2.sh	needs root and Linux mount --bind
+SKIP	tests/du/bind-mount-dir-cycle.sh	needs root and Linux mount --bind
+FAIL	tests/du/block-size.sh	BSD du prints plain block counts; GNU block-size suffixes like KiB are not supported
+FAIL	tests/du/deref-args.sh	GNU -D and --apparent-size are not BSD du options
+FAIL	tests/du/deref.sh	BSD du -L reports the dotdot cycle, and --exclude is not a BSD du option
+FAIL	tests/du/exclude.sh	GNU --exclude and --exclude-from are not BSD du options (BSD uses -I)
+SKIP	tests/du/fd-leak.sh	expensive, needs RUN_EXPENSIVE_TESTS=yes
+FAIL	tests/du/files0-from-dir.sh	GNU --files0-from is not a BSD du option
+FAIL	tests/du/hard-link.sh	GNU --exclude is not a BSD du option
+FAIL	tests/du/inacc-dest.sh	BSD du names the unreadable entry (./c/j) instead of GNU's "cannot read directory" wording
+FAIL	tests/du/inacc-dir.sh	BSD du prints no line for a directory it cannot read
+FAIL	tests/du/inodes.sh	GNU --inodes is not a BSD du option
+SKIP	tests/du/long-from-unreadable.sh	getconf NAME_MAX is unavailable on macOS
+FAIL	tests/du/long-sloop.sh	BSD du names the looping path where GNU prints "cannot access"
+FAIL	tests/du/max-depth.sh	GNU --max-depth is not a BSD du option (BSD uses -d)
+SKIP	tests/du/move-dir-while-traversing.sh	needs python with the Linux inotify package
+FAIL	tests/du/no-x.sh	BSD du does not quote the path in its error message
+SKIP	tests/du/one-file-system.sh	needs a writable directory on a second file system
+FAIL	tests/du/slash.sh	GNU --exclude is not a BSD du option
+SKIP	tests/du/threshold.sh	APFS directory block size is too small for the test
+FAIL	tests/du/trailing-slash.sh	macOS fts keeps the operand's trailing slash, printing slink//1 where GNU prints slink/1
+FAIL	tests/du/files0-from.pl	GNU --files0-from is not a BSD du option, so du exits 64 (usage)
