@@ -53,3 +53,25 @@ bench-compare base="origin/main" *trees="":
 record-bench:
     make bench
     zig run tools/readme.zig -- record
+
+fuzz_run := "zig run -O ReleaseSafe -lc tests/fuzz/main.zig --"
+
+fuzz SEEDS="1:1500":
+    make dush
+    {{fuzz_run}} run --target ./dush --seeds {{SEEDS}}
+
+fuzz-long SECONDS="1800":
+    make dush
+    {{fuzz_run}} run --target ./dush --seconds {{SECONDS}} --random
+
+fuzz-replay SEED:
+    make dush
+    {{fuzz_run}} replay --target ./dush --seed {{SEED}}
+
+fuzz-selftest SEEDS="1:500":
+    {{fuzz_run}} run --target /usr/bin/du --seeds {{SEEDS}} --failures fuzz-failures/selftest-du
+    for m in order blocksize exit stderr k; do {{fuzz_run}} run --target tests/fuzz/broken_du.sh --target-env BROKEN_MODE=$m --seeds {{SEEDS}} --no-shrink --expect-mismatch --failures fuzz-failures/selftest-$m >/dev/null 2>&1 && echo "broken $m: caught" || { echo "broken $m: NOT caught"; exit 1; }; done
+
+fuzz-stress *ARGS:
+    make dush
+    {{fuzz_run}} stress --target ./dush {{ARGS}}

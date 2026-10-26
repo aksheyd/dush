@@ -45,3 +45,11 @@ jobs:
       - name: just upstream-gnu
         if: ${{ !cancelled() }}
         run: just upstream-gnu
+
+      - name: just fuzz-selftest
+        if: ${{ !cancelled() }}
+        run: just fuzz-selftest
+
+      - name: just fuzz
+        if: ${{ !cancelled() }}
+        run: just fuzz
