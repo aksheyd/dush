@@ -128,9 +128,9 @@ Not every upstream case passes against `/usr/bin/du` itself: GNU tests use GNU-o
 | `src/cli.zig` | Options, argument parsing, usage, default thread count |
 | `src/walk.zig` | Parallel `getattrlistbulk` walker with a `readdir`/`fstatat` fallback |
 | `src/fts_walk.zig` | `fts(3)` walker for the per-entry modes (`-a`, `-d`, `-L`, `-x`, `-I`, ...), mirroring `du.c` |
-| `src/accounting.zig` | Pure size math: 512-byte rounding, block conversion |
+| `src/accounting.zig` | Pure size math: 512-byte rounding, `howmany`, and `Scale` (du's block-size arithmetic) |
 | `src/inodes.zig` | Thread-safe `(dev, ino)` set and `chargeFile`, the hard-link dedup kernel |
-| `src/format.zig` | BSD `humanize_number` clone and output lines |
+| `src/format.zig` | `humanize_number` clone (binary and `--si`) and output lines |
 | `src/errors.zig`, `src/path.zig`, `src/sys.zig` | Diagnostics, path joining, libc and Darwin bindings |
 | `tests/unit/` | Zig unit tests against the `src/` modules |
 | `tests/parity/` | Black-box parity tests of the built binary against `/usr/bin/du` |

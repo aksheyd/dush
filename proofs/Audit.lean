@@ -1,10 +1,6 @@
 import Dush
 import Lean
 
-/-! Prints the axioms behind every main theorem and fails unless they are among Lean's three
-standard axioms `propext`, `Classical.choice` and `Quot.sound`. In particular a `sorry`
-anywhere underneath (which shows up as `sorryAx`) or any added `axiom` makes this file fail. -/
-
 open Lean Elab Command in
 elab "#audit " ids:ident* : command => do
   let allowed := [``propext, ``Classical.choice, ``Quot.sound]
@@ -27,6 +23,11 @@ elab "#audit " ids:ident* : command => do
   Dush.flag_blocks_agree
   Dush.getbsize_bounds
   Dush.getbsize_suffix_dvd
+  Dush.scale_default_entry
+  Dush.scale_default_display
+  Dush.scale_default_human
+  Dush.scale_default_bytes
+  Dush.scale_physical_cb
   Dush.blocksize_1000_quirk
   Dush.blocksize_1000_apparent
   Dush.Human.humanize_eq_closed
@@ -47,7 +48,13 @@ elab "#audit " ids:ident* : command => do
   Dush.Acct.workers_sum
   Dush.Acct.parallel_eq_sequential
   Dush.Acct.grand_total_eq
+  Dush.Acct.linkStep_eq_duStep
+  Dush.Acct.duStep_comm
+  Dush.Acct.duTotal_perm
+  Dush.Acct.du_workers_sum
+  Dush.Acct.du_parallel_eq_sequential
   Dush.Acct.du_grand_total_eq
+  Dush.Acct.du_counted_once
   Dush.Acct.du_eq_dush
   Dush.Acct.dush_bytes_eq_du_units
   Dush.Acct.du_expiry_counterexample

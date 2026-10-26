@@ -1,16 +1,5 @@
 import Dush
 
-/-! Golden vectors for `tests/proof/bridge_test.zig`, computed by the definitions the theorems
-are about. `just proof` regenerates `vectors/golden.txt` and fails if it changed.
-
-Line formats (space separated):
-* `H n s` — `Dush.Human.humanize n = s`
-* `R n m` — `Dush.roundUp512 n = m`
-* `S a size blocks b` — `Entry.bytes` with `-A` iff `a = 1`
-* `B bs n k` — `Dush.dushBlocks bs n = k`
-* `A a k t_1 … t_k grand m e_1 … e_m` — `k` operands, their totals (`opTotals`), the `-c`
-  total (`total` of the flattened trace), then `m` entries `op dev ino nlink blocks size`. -/
-
 open Dush Dush.Acct
 
 def lcg (s : Nat) : Nat := (s * 6364136223846793005 + 1442695040888963407) % 2 ^ 64
@@ -61,11 +50,17 @@ def showEntry (p : Nat × Entry) : String :=
 def traceLine (apparent : Bool) (tr : List (Nat × Entry)) : String :=
   let w := Entry.bytes apparent
   let ops := (List.range 3).map fun i => (tr.filter (·.1 = i)).map Prod.snd
-  let ts := opTotals w Seen.empty ops
-  let grand := total w (tr.map Prod.snd)
+  let ts := duOpTotals w (fun _ => 0) ops
+  let grand := duTotal w (tr.map Prod.snd)
   let a := if apparent then 1 else 0
   s!"A {a} {ts.length} " ++ " ".intercalate (ts.map toString) ++ s!" {grand} {tr.length} " ++
     " ".intercalate (tr.map showEntry)
+
+def b01 (b : Bool) : Nat := if b then 1 else 0
+
+def rawCbs : List Nat := [1, 100, 511, 512, 513, 1000, 1024, 4096, 1048576]
+
+def rawBss : List Nat := [512, 1000, 1024, 4096, 1048576, 1073741824]
 
 def main : IO Unit := do
   for n in humanizeInputs do
@@ -80,6 +75,22 @@ def main : IO Unit := do
   for bs in blockSizes do
     for n in (List.range 70).map (· * 511) ++ (iterate lcg 100 (bs % 97)).map (· % 2 ^ 62) do
       IO.println s!"B {bs} {n} {dushBlocks bs n}"
+  for a in [false, true] do
+    for cb in rawCbs do
+      for bs in rawBss do
+        for r in iterate lcg 6 (cb * 31 + bs % 1009 + b01 a) do
+          let sc := Scale.init a cb bs
+          let size := r % 2 ^ 40
+          let blocks := (r / 2 ^ 40) % 2 ^ 20
+          let n := (r / 7) % 2 ^ 40
+          IO.println s!"C {b01 a} {cb} {bs} {size} {blocks} {n} {sc.entryBlocks size blocks} {sc.display n} {sc.humanBytes n}"
+  for live in [false, true] do
+    for links in List.range 8 do
+      for nlink in List.range 8 do
+        let li : Int := (links : Int) - 2
+        let ni : Int := (nlink : Int) - 1
+        let (sk, l', lv') := linkStep live li ni
+        IO.println s!"L {b01 live} {li} {ni} {b01 sk} {l'} {b01 lv'}"
   for seed in List.range 200 do
     let tr := mkTrace seed (seed % 40)
     IO.println (traceLine false tr)

@@ -26,9 +26,10 @@ jobs:
       - name: just checks
         run: just checks
 
-      - name: cache lean toolchain and proof build
+      - name: restore lean toolchain and proof build
+        id: lean-cache
         if: ${{ !cancelled() }}
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.elan
@@ -45,6 +46,15 @@ jobs:
           fi
           export PATH="$HOME/.elan/bin:$PATH"
           just proof
+
+      - name: save lean toolchain and proof build
+        if: ${{ !cancelled() && steps.lean-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.elan
+            proofs/.lake
+          key: lean-${{ runner.os }}-${{ hashFiles('proofs/lean-toolchain', 'proofs/lakefile.toml', 'proofs/lake-manifest.json') }}-${{ hashFiles('proofs/**/*.lean') }}
 
       - name: just frozen-bsd
         if: ${{ !cancelled() }}

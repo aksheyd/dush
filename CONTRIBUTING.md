@@ -7,16 +7,24 @@ Anyone can merge a change that keeps the gate green. The gate is what proves
 
 ```sh
 brew install zig just atf kyua coreutils hyperfine
+curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
 just test
+just proof
 ```
 
-`just test` is what CI runs on macOS. It must pass with no edits to the suites:
+`just test` and `just proof` are what CI runs on macOS. Both must pass with no
+edits to the suites:
 
 - `just checks`: no comments in our own code, Zig unit and parity
   tests, the frozen `du` totals suite, the freeze check and the README check.
 - `just frozen`: the Zig ports of the BSD and GNU `du` suites (`tests/frozen/`).
 - `just upstream`: the FreeBSD, Apple and GNU coreutils `du` scripts run
   verbatim (`tests/upstream/`).
+- `just proof`: builds the Lean proofs in `proofs/` with warnings as errors,
+  rejects `sorry` and custom axioms, audits the axioms of every main theorem,
+  regenerates `proofs/vectors/golden.txt` and fails if it changed, then runs the
+  bridge (`tests/proof/bridge_test.zig`), which checks `src/` against those
+  vectors. elan installs the pinned toolchain from `proofs/lean-toolchain`.
 
 Some upstream and GNU-port cases fail or skip for `/usr/bin/du` itself (GNU-only
 options, UFS-specific sizes, Linux-only setups). Each suite's `EXPECTED` file
@@ -35,10 +43,13 @@ there (such as an `EXPECTED` baseline) is allowed.
 
 ## Fuzzing and proofs
 
-The differential fuzzer (`tests/fuzz/`) and the Lean proofs of the size math
-(`proofs/`) join the gate as soon as they land; when they do, run their `just`
-recipes alongside `just test`. The proofs cover `accounting.howmany`, `Scale` and
-`inodes.linkStep`; if you change those functions, the proofs must still check.
+The differential fuzzer (`tests/fuzz/`) joins the gate as soon as it lands. The
+proofs and bridge cover `accounting.howmany`, `Scale`, `format.humanize`,
+`inodes.linkStep` and `InodeSet.chargeFile`. Every file charge must go through
+`InodeSet.chargeFile`. If you change one of those functions on purpose, change
+the Lean model to match, rerun `just proof` and commit the regenerated vectors.
+[proofs/README.md](proofs/README.md) lists what is proven, what is only tested
+and what is not covered.
 
 ## Performance changes
 
@@ -56,9 +67,10 @@ README table is common-case only; refresh it with `just record-bench`.
 
 ## Style
 
-- No comments at all, full-line or trailing, in `.zig`, `.sh`, `.pl`, `.py`,
-  workflow, `Makefile`, `justfile` or `.tape` files. Only the frozen verbatim
-  suites in `tests/frozen/` and `tests/upstream/` are exempt.
+- No comments at all, full-line or trailing, in `.zig`, `.lean`, `.sh`, `.pl`,
+  `.py`, workflow, `Makefile`, `justfile` or `.tape` files. Only the frozen
+  verbatim suites in `tests/frozen/` and `tests/upstream/` are exempt.
+  `just no-comments` enforces it; put explanations in a README.
 - `dush` invoked as `du` must stay byte-for-byte `/usr/bin/du`. As `dush`, only
   the documented defaults (`-s`, `-h`, the `dush:` prefix, `--threads`) differ.
 - Change `README.md` whenever `src/` changes; the README check enforces it.

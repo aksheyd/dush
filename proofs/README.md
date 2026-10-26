@@ -26,145 +26,142 @@ just proof
 
 | File | Contents |
 | --- | --- |
-| `Dush/Units.lean` | Per-entry charge, 512-byte rounding, `-k`/`-m`/`-g` and `BLOCKSIZE` conversion |
-| `Dush/Humanize.lean` | The `du -h` formatter (`humanize_number` with dush's arguments) |
-| `Dush/Accounting.lean` | Hard-link dedup, traversal-order independence, N parallel workers |
-| `Dush/Operands.lean` | Several operands, `-c`, and macOS `du`'s expiring `linkchk` table |
+| `Dush/Units.lean` | `howmany`, 512-byte rounding, `getbsize`, and `Scale` (du's `cblocksize`/`blocksize` arithmetic) |
+| `Dush/Humanize.lean` | The `du -h` formatter (`humanize_number` with du's arguments) |
+| `Dush/Accounting.lean` | The ideal hard-link model: a permanent seen-set, order and worker independence, exactly-once |
+| `Dush/Operands.lean` | du's expiring `linkchk` table as `src/` implements it (`linkStep`, `duStep`), `-c`, and the link to the ideal model |
 | `Audit.lean` | Axiom audit of the main theorems |
 | `Ref.lean` | `dushref`, which writes `vectors/golden.txt` |
+
+The Lean sources carry no comments, following the repository rule; this file is their
+documentation. `just no-comments` (`tools/comments.zig`) rejects `--` and `/-` outside string
+literals in every `.lean` file.
+
+## The model
+
+An entry is a sighting of a file: `(dev, ino, nlink, blocks, size)`. It is *tracked* when
+`nlink > 1` and `ino ≠ 0`. Every non-directory charge site in `src/` (`walk.zig`'s bulk path,
+its POSIX fallback and `scanTarget`, and `fts_walk.zig` unless `-l`) goes through
+`InodeSet.chargeFile` in `src/inodes.zig`. That calls `visit`, which applies `linkStep`, the
+transcription of macOS `du`'s `linkchk`: on the first sighting of a tracked inode it stores
+`nlink - 1` remaining sightings and charges the entry; each later sighting decrements the count
+and is skipped; at 0 the entry is dead and the next sighting charges again.
+
+- `linkStep` in Lean is the same function over `Int` as the Zig one. `linkStep_eq_duStep` shows
+  it agrees with `duStep`, the per-entry step used in the theorems.
+- `duStep`/`duTotal` model `src/` and du. `step`/`total` in `Accounting.lean` model an ideal
+  permanent seen-set, used as the reference for "each inode is counted once".
+- Every theorem holds for any per-entry weight `w`, so it covers physical and `-A` charging and
+  any `Scale`.
 
 ## What is proven
 
 All of these are theorems over natural numbers, checked by Lean's kernel.
 
-### (a) Order and worker-split independence (`Dush/Accounting.lean`)
+### (a) Order and worker-split independence
 
-The model mirrors the kernel that every file site in `src/walk.zig` calls,
-`InodeSet.chargeFile` in `src/inodes.zig`: an entry is skipped when `nlink > 1` and
-`seen(dev, ino)` is true, and is otherwise charged its byte weight. `seen` ignores inode 0 and
-never forgets a key. Every theorem holds for any per-entry weight `w`, so it covers both
-physical and `-A` charging.
+*Consistent* means two sightings of the same `(dev, ino)` agree on `nlink` and on weight.
 
-- `total_perm`: two traversals that are permutations of each other give the same total, provided
-  the snapshot is *consistent*, meaning two sightings of the same `(dev, ino)` agree on
-  `nlink > 1` and on size. `order_matters_without_consistency` shows that this assumption is
-  needed.
-- `workers_sum` and `parallel_eq_sequential`: tag each entry with the worker (< N) that
-  processed it, in the order the mutex-protected inode set handled the calls. Each worker sums
-  its own charges (`local_bytes`) and adds them to the shared total once (`fetchAdd`). The sum
-  of the N partial sums equals one sequential pass over the trace, and therefore equals the
-  sequential total of the traversal in any order.
+- `duStep_comm`, `duTotal_perm`: two traversals that are permutations of each other give the
+  same `duTotal`, provided the snapshot is consistent. `total_perm` is the same for the ideal
+  model, and `order_matters_without_consistency` shows that the assumption is needed.
+- `du_workers_sum`, `du_parallel_eq_sequential`: tag each entry with the worker (< N) that
+  processed it, in the order the mutex-protected `InodeSet` handled the calls. Each worker sums
+  its own charges and adds them to the shared total once (`fetchAdd`). The sum of the N partial
+  sums equals one sequential pass over that trace, and therefore equals the sequential total of
+  any traversal order. `workers_sum` and `parallel_eq_sequential` are the ideal-model versions.
 
 ### (b) Each hard-linked inode is counted exactly once
 
-- `counted_once`: if any entry with `nlink > 1` and key `k` (inode not 0) appears, exactly one
-  entry with key `k` is charged.
-- `counted_untracked`: every entry with `nlink ≤ 1` or inode 0 is charged.
-- `counted_sublist`: the charged entries are a subsequence of the traversal.
-- `total_eq_counted`: the total is the sum of the weights of the charged entries.
+- `counted_once`, `counted_untracked`, `counted_sublist`, `total_eq_counted`: in the ideal
+  model, every untracked entry is charged and exactly one sighting of each tracked inode is.
+- `du_eq_dush`: if no tracked inode is seen more often than its link count (`LinkBounded`),
+  `duTotal` equals the ideal `total`.
+- `du_counted_once`: under the same condition, `src/`'s expiring table charges exactly one
+  sighting of each tracked inode that appears.
+- `du_expiry_counterexample`: without the condition, the expiring table charges an inode again.
+  `du -c a a a` with `a` a 2-link, 16-block file prints `16`, `16` and `32 total` on macOS (the
+  second sighting is skipped and prints no line), and `src/` does the same. The ideal set would
+  charge `16, 0, 0`.
 
 ### (c) Rounding and block conversion (`Dush/Units.lean`)
 
 - `roundUp512_dvd`, `le_roundUp512`, `roundUp512_least`: `roundUp512 n` is the least multiple of
   512 that is ≥ `n`.
-- `entryBytes_eq_duUnits`: dush's per-entry bytes are exactly 512 × du's per-entry units
-  (`st_blocks`, or `howmany(st_size, 512)` with `-A`).
-- `dushBlocks_eq_du_apparent` and `dushBlocks_eq_du_physical`: dush's `(bytes + bs - 1) / bs`
-  equals du's `howmany` formula. With `-A` this holds for every block size. Without `-A` it
-  needs a block size that is a multiple of 512.
-- `flag_blocks_agree`: the block sizes for `-k`, `-m`, and `-g` are multiples of 512, so dush and
-  du agree on them.
-- `getbsize_bounds` and `getbsize_suffix_dvd`: a model of `getbsize(3)`. Any `K`, `M`, or `G`
-  suffix yields a multiple of 512.
-- `blocksize_1000_quirk` and `blocksize_1000_apparent`: with `BLOCKSIZE=1000`, du prints 16 for
-  a 16-block file (verified on macOS), not 9. dush does not read `BLOCKSIZE`.
+- `entryBytes_eq_duUnits`, `dushBlocks_eq_howmany`, `dushBlocks_eq_du_apparent`,
+  `dushBlocks_eq_du_physical`, `flag_blocks_agree`: byte-level rounding agrees with du's
+  `howmany` units; with `-A` for every block size, otherwise for multiples of 512, which
+  includes `-k`, `-m` and `-g`.
+- `getbsize_bounds`, `getbsize_suffix_dvd`: a model of `getbsize(3)`'s clamping and suffixes.
+- `scale_default_entry`, `scale_default_display`, `scale_default_human`, `scale_default_bytes`:
+  with the default 512-byte `cblocksize`, `Scale.entryBlocks`, `display` and `humanBytes` equal
+  du's units, `howmany` block conversion and `512 ×` units.
+- `scale_physical_cb`: without `-A`, `Scale.init` rounds `cblocksize` up to whole sectors.
+- `blocksize_1000_quirk`, `blocksize_1000_apparent`: with `BLOCKSIZE=1000`, du prints 16 for a
+  16-block file (verified on macOS), not 9; `Scale` reproduces it.
+- `dush_bytes_eq_du_units`: for any trace, the expiring-table total in bytes is exactly
+  `512 ×` the total in du's units.
 
 ### (d) `du -h` (`Dush/Humanize.lean`)
 
 `humanize` is a literal transcription of `humanize_number(buf, 5, n, "", HN_AUTOSCALE,
-HN_B | HN_NOSPACE | HN_DECIMAL)` for `n ≥ 0`. This is what du's `prthumanval` calls, and the
-same loop as `format.humanize`.
+HN_B | HN_NOSPACE | HN_DECIMAL)` for `n ≥ 0`, which is what du's `prthumanval` calls.
 
 - `humanize_eq_closed`: the loop equals a loop-free formula.
-- `scale_eq_iff`: the unit-selection rule. Unit `s` (B, K, M, G, T, P, E) is chosen exactly when
-  `thr (s-1) ≤ n < thr s`, where `thr 0 = 1000` and `thr (s+1) = 1023488 · 1024^s`. Here
-  1023488 = 999.5 × 1024, the point where 999.5K rounds up to 1.0M.
-- `mantissa_eq`: the printed mantissa is `n / 1024^(s-1)` before the final rounding.
-- `scale_mono` and `value10_mono`: monotonicity. A larger size never gets a smaller unit or a
-  smaller displayed value.
-- `value10_upper` and `value10_lower`: each unit displays values from 1.0 to 999.
-- `mantissa_bounds`: for every `i64` total, the string fits du's 4-character column.
-- Exact strings checked by the kernel, including `0B`, `999B`, `1.0K` for 1000, `9.9K` for
-  10188, `10K` for 10189, `999K` for 1023487, `1.0M` for 1023488, and `1.0G`.
+- `scale_eq_iff`: unit `s` (B, K, M, G, T, P, E) is chosen exactly when
+  `thr (s-1) ≤ n < thr s`, where `thr 0 = 1000` and `thr (s+1) = 1023488 · 1024^s`
+  (1023488 = 999.5 × 1024, where 999.5K rounds to 1.0M).
+- `mantissa_eq`, `scale_mono`, `value10_mono`, `value10_upper`, `value10_lower`,
+  `mantissa_bounds`: the mantissa formula, monotonicity, the 1.0 to 999 display range, and that
+  every `i64` total fits du's 4-character column.
+- Exact strings checked by the kernel: `0B`, `999B`, `1.0K` for 1000, `9.9K` for 10188, `10K`
+  for 10189, `999K` for 1023487, `1.0M` for 1023488, and `1.0G`.
 
-### (e) `-c` and inodes shared across operands (`Dush/Operands.lean`)
+### (e) The `-c` total (`Dush/Operands.lean`)
 
-- `grand_total_eq`: dush shares one inode set across operands and prints the sum of the operand
-  totals. That `total` line equals one pass over all operands' entries, so with consistency it
-  does not depend on operand order. The split between the per-operand lines does depend on
-  order: a file shared by two operands is charged to whichever comes first.
-- `du_grand_total_eq`: the same statement for du, whose `-c` total is the sum of root operand
-  totals.
-- `du_eq_dush`: du's `linkchk` remembers a hard-linked inode for only `nlink` sightings.
-  Within one run, if no inode with `nlink > 1` is met more often than its link count and those
-  inodes have nonzero inode numbers, du's expiring table and dush's permanent set give the same
-  total. `dush_bytes_eq_du_units` restates this in du's 512-byte units.
-- `du_expiry_counterexample`: when the condition fails, they disagree. `du -c a a a` with `a` a
-  2-link, 16-block file prints `16`, `16`, `32 total` on macOS, because the table entry expires
-  after two sightings. dush charges the inode once.
-- `total_line_not_sum_of_lines`: with `-k`, the `total` line is rounded once, so it can be
+- `du_grand_total_eq`: operands share one table, and the `-c` total, the sum of the per-operand
+  totals, equals one pass over all operands' entries. With consistency it therefore does not
+  depend on operand order (`duTotal_perm`). The split between per-operand lines does depend on
+  order. `grand_total_eq` is the ideal-model version.
+- `total_line_not_sum_of_lines`: with `-k` the `total` line is rounded once, so it can be
   smaller than the sum of the rounded per-operand lines. du does the same.
 
 ## What is only tested against the proof
 
 These links between the model and `src/` are checked by tests, not proven:
 
-- `tests/proof/bridge_test.zig` reads `vectors/golden.txt`, about 8,800 vectors produced by the
-  Lean definitions above, and checks:
-  - `format.humanize` on every boundary in every unit, on powers of two ±1, on 4,000
-    pseudo-random values, and on `2^63 - 1`;
-  - `accounting.roundUp512`, `accounting.statBytes` (physical and `-A`), and
-    `accounting.toBlocks` for block sizes 512, 1000, 1024, 4096, 1M, and 1G;
-  - 400 traces of hard-linked, unlinked, and inode-0 entries split across 3 operands. Each trace
-    runs through the real `InodeSet.chargeFile`, sequentially per operand, compared with
-    `opTotals` and the `-c` total. It then runs again with 1, 2, 4, and 8 threads sharing one
-    `InodeSet` and an atomic total, compared with the Lean total.
-- That the Lean `humanize` and the unit model agree with macOS `/usr/bin/du`. This is not
-  proven, because the model transcribes `humanize_number` rather than deriving it from libc. It
-  was checked once on macOS:
-  - `du -A -h` on sparse files gave the golden string for all 144 golden vectors that are
-    multiples of 512 and that APFS could create (up to 2^54 bytes);
-  - the `BLOCKSIZE` and `du -c a a a` cases above were also checked.
-
-  The parity, frozen, and upstream suites in `tests/` cover this more broadly. None of these
-  checks is part of `just proof`.
+- `tests/proof/bridge_test.zig` reads `vectors/golden.txt` (about 9,600 vectors produced by the
+  Lean definitions) and checks:
+  - `format.humanize` with `.binary` on every unit boundary, powers of two ±1, 4,000
+    pseudo-random values and `2^63 - 1`;
+  - `accounting.roundUp512`, `statBytes` (physical and `-A`) and `toBlocks`;
+  - `accounting.Scale.init`, `entryBlocks`, `display` and `humanBytes` for raw `cblocksize`
+    1 to 1M and raw `blocksize` 512 to 1G, physical and `-A`;
+  - `inodes.linkStep` on every combination of `live`, `links` from -2 to 5 and `nlink` from -1
+    to 6;
+  - 400 traces of hard-linked, unlinked and inode-0 entries across 3 operands, run through the
+    real `InodeSet.chargeFile` per operand and compared with `duOpTotals` and the `-c` total,
+    once in bytes and once in `Scale` units (bytes = 512 × units), then again with 1, 2, 4 and
+    8 threads sharing one `InodeSet` and an atomic total.
+- That the Lean `humanize` and `Scale` agree with macOS `/usr/bin/du`. The model transcribes
+  `humanize_number` and du.c rather than deriving them from libc. It was spot-checked on macOS,
+  and the parity, frozen and upstream suites in `tests/` cover it more broadly; those are not
+  part of `just proof`.
 - That the Zig `i64` arithmetic matches the Lean natural-number arithmetic. The vectors stay
-  below `2^63`, and the bridge exercises values near that limit. Overflow is not proven absent.
+  below `2^63`; overflow is not proven absent.
 
 ## What is NOT covered
 
-- **Syscalls.** That `fstatat`, `getattrlistbulk`, and `openat` return what the model assumes is
-  not proven. In particular, the model assumes that a hard-linked inode reports the same
-  `nlink` and size at every sighting. It also assumes that the bulk path's
-  `ATTR_FILE_ALLOCSIZE` equals `st_blocks * 512`, which can differ, for example on compressed
-  files.
-- **The `getattrlistbulk` walk.** It is not proven that `src/walk.zig` visits each directory
-  entry exactly once. The model starts from whatever list of entries the walk reaches. Also not
-  proven:
-  - directory dedup and subtree skipping (the per-operand `dirs` set);
-  - `-x`, `-L`/`-H`/`-P`, and symlink handling;
-  - error paths and partial results;
-  - `InodeSet.seen` returning `false` when its allocation fails.
-- **The concurrency memory model.** The theorems assume that `InodeSet`'s mutex makes `seen`
-  linearizable, and that every worker's `fetchAdd` completes before `scanTarget` reads the total
-  (the threads are joined first). The Zig and C11 memory models are not formalized. The bridge
-  runs real threads, but a passing run is evidence, not proof.
-- **Output lines.** Tab separation, `%4s` padding, path printing, `-d` depth limits, and
-  `-a`/`-s` selection are not modeled.
-- **Known differences from du that the model records but does not fix:**
-  - dush ignores `BLOCKSIZE`.
-  - dush never forgets a hard link, while du forgets one after `nlink` sightings. They differ
-    only when an inode is met more often than its link count, for example when the same file is
-    passed twice.
-  - When a hard-linked non-directory operand was already charged, dush prints a `0` line for it,
-    while du prints nothing. The `-c` total is unaffected.
+- **Syscalls and libc.** That `fstatat`, `getattrlistbulk`, `openat` and fts return what the
+  model assumes, including the same `nlink` and size at every sighting of an inode and
+  `ATTR_FILE_ALLOCSIZE == st_blocks * 512` on the bulk path. `src/` calls libc `getbsize`; only
+  the Lean model of it is proven, and the bridge feeds `Scale.init` raw values.
+- **`format.humanize` with `.si`** (`-H`/`--si`) is neither proven nor bridged.
+- **`Scale.threshold`, `Scale.passes` and `fastPathCompatible`** (`-t`) are not modeled.
+- **The walk.** That `walk.zig` and `fts_walk.zig` visit each entry exactly once, directory
+  dedup (`dirs`), `-x`, `-L`/`-H`/`-P`, `-l` (which bypasses `chargeFile`), symlinks, error
+  paths and allocation failure inside `InodeSet`.
+- **The concurrency memory model.** The theorems assume `InodeSet`'s mutex makes `visit`
+  linearizable and that every `fetchAdd` completes before the total is read. The bridge runs
+  real threads, but a passing run is evidence, not proof.
+- **Output lines.** Tabs, padding, paths, `-d`, `-a`/`-s` selection and which lines print.

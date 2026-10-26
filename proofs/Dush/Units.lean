@@ -1,36 +1,17 @@
-/-!
-# Per-entry rounding and unit conversion
-
-Spec source: Apple `file_cmds/du/du.c` and FreeBSD `lib/libc/gen/getbsize.c`.
-
-* `du` accumulates 512-byte units (`DEV_BSIZE`). Physical: `st_blocks`.
-  Apparent (`-A`): `howmany(st_size, 512)`.
-* `dush` accumulates bytes: `st_blocks * 512`, or `roundUp512 st_size` with `-A`.
-* `du` prints a non-human total `U` as `howmany(U * cblocksize, blocksize)` where,
-  without `-A`, both `cblocksize` and `blocksize` were first integer-divided by 512.
-* `dush` prints `printResult`'s `(bytes + bs - 1) / bs`.
--/
-
 namespace Dush
 
-/-- `howmany(x, y)` from `<sys/param.h>`. -/
 def howmany (x y : Nat) : Nat := (x + (y - 1)) / y
 
-/-- `dush`'s `roundUp512`. -/
 def roundUp512 (size : Nat) : Nat := (size + 511) / 512 * 512
 
-/-- `dush`'s per-entry byte charge. -/
 def entryBytes (apparent : Bool) (size blocks : Nat) : Nat :=
   if apparent then roundUp512 size else blocks * 512
 
-/-- `du`'s per-entry charge in 512-byte units (`curblocks` with the default `-B`). -/
 def duUnits (apparent : Bool) (size blocks : Nat) : Nat :=
   if apparent then howmany size 512 else blocks
 
-/-- `dush`'s `printResult` for `block_size > 0`. -/
 def dushBlocks (bs bytes : Nat) : Nat := (bytes + bs - 1) / bs
 
-/-- `du`'s non-human output of a total of `units` 512-byte units, default `-B`. -/
 def duBlocks (apparent : Bool) (bs units : Nat) : Nat :=
   if apparent then howmany (units * 512) bs else howmany units (bs / 512)
 
@@ -40,13 +21,11 @@ theorem roundUp512_dvd (n : Nat) : 512 ∣ roundUp512 n :=
 theorem le_roundUp512 (n : Nat) : n ≤ roundUp512 n := by
   unfold roundUp512; omega
 
-/-- `roundUp512 n` is the least multiple of 512 that is at least `n` (ceil to 512). -/
 theorem roundUp512_least {n m : Nat} (hm : 512 ∣ m) (hn : n ≤ m) : roundUp512 n ≤ m := by
   unfold roundUp512; omega
 
 theorem roundUp512_eq_howmany (n : Nat) : roundUp512 n = howmany n 512 * 512 := rfl
 
-/-- Every `dush` byte charge is exactly 512 times `du`'s unit charge. -/
 theorem entryBytes_eq_duUnits (apparent : Bool) (size blocks : Nat) :
     entryBytes apparent size blocks = 512 * duUnits apparent size blocks := by
   cases apparent <;> simp [entryBytes, duUnits, roundUp512, howmany] <;> omega
@@ -55,12 +34,10 @@ theorem dushBlocks_eq_howmany {bs : Nat} (h : 0 < bs) (bytes : Nat) :
     dushBlocks bs bytes = howmany bytes bs := by
   unfold dushBlocks howmany; congr 1; omega
 
-/-- With `-A`, `dush`'s conversion agrees with `du` for every block size. -/
 theorem dushBlocks_eq_du_apparent {bs : Nat} (h : 0 < bs) (units : Nat) :
     dushBlocks bs (512 * units) = duBlocks true bs units := by
   rw [dushBlocks_eq_howmany h]; simp [duBlocks, Nat.mul_comm]
 
-/-- Without `-A`, they agree whenever the block size is a multiple of 512. -/
 theorem dushBlocks_eq_du_physical {bs : Nat} (h0 : 0 < bs) (h : 512 ∣ bs) (units : Nat) :
     dushBlocks bs (512 * units) = duBlocks false bs units := by
   obtain ⟨k, rfl⟩ := h
@@ -69,7 +46,6 @@ theorem dushBlocks_eq_du_physical {bs : Nat} (h0 : 0 < bs) (h : 512 ∣ bs) (uni
   rw [Nat.mul_div_cancel_left k (by decide : 0 < 512), ← Nat.div_div_eq_div_mul]
   congr 1; omega
 
-/-- The `-k`, `-m` and `-g` block sizes. -/
 def flagBlockSize : Char → Option Nat
   | 'k' => some 1024
   | 'm' => some 1048576
@@ -81,7 +57,6 @@ theorem flagBlockSize_dvd {c : Char} {bs : Nat} (h : flagBlockSize c = some bs) 
   unfold flagBlockSize at h
   split at h <;> simp at h <;> subst h <;> decide
 
-/-- `dush` with `-k`, `-m` or `-g` prints the same number as `du`, with or without `-A`. -/
 theorem flag_blocks_agree {c : Char} {bs : Nat} (h : flagBlockSize c = some bs)
     (apparent : Bool) (units : Nat) :
     dushBlocks bs (512 * units) = duBlocks apparent bs units := by
@@ -94,7 +69,6 @@ inductive BSUnit where
   | none | K | M | G
   deriving DecidableEq, Repr
 
-/-- `BLOCKSIZE` after `strtol`: unset or empty, negative, malformed suffix, or `n` with a unit. -/
 inductive BlockSizeEnv where
   | unset
   | negative
@@ -102,7 +76,6 @@ inductive BlockSizeEnv where
   | num (n : Nat) (u : BSUnit)
   deriving DecidableEq, Repr
 
-/-- `getbsize(3)`'s returned block size. -/
 def getbsize : BlockSizeEnv → Nat
   | .unset => 512
   | .negative => 512
@@ -122,18 +95,54 @@ theorem getbsize_bounds (e : BlockSizeEnv) : 512 ≤ getbsize e ∧ getbsize e �
   | num n u => cases u <;> simp only [getbsize] <;> split <;> split <;> split <;> omega
   | _ => simp [getbsize]
 
-/-- A `K`, `M` or `G` suffix always yields a multiple of 512, so `dush` would agree with `du`. -/
 theorem getbsize_suffix_dvd (n : Nat) (u : BSUnit) (hu : u ≠ .none) :
     512 ∣ getbsize (.num n u) := by
   cases u <;> simp only [getbsize] at * <;> (try contradiction) <;> split <;> split <;> split <;> omega
 
-/-- `BLOCKSIZE=1000 du -s` on a 16-block file prints 16 (blocksize truncates to 1 unit),
-not `ceil(8192 / 1000) = 9`. Verified on macOS. `dush` does not read `BLOCKSIZE`. -/
+structure Scale where
+  apparent : Bool
+  cblocksize : Nat
+  blocksize : Nat
+deriving DecidableEq, Repr
+
+def Scale.init (apparent : Bool) (rawCb rawBs : Nat) : Scale :=
+  let cb := if !apparent && rawCb % 512 != 0 then howmany rawCb 512 * 512 else rawCb
+  if apparent then ⟨apparent, cb, rawBs⟩ else ⟨apparent, cb / 512, rawBs / 512⟩
+
+def Scale.entryBlocks (sc : Scale) (size blocks : Nat) : Nat :=
+  howmany (if sc.apparent then size else blocks) sc.cblocksize
+
+def Scale.display (sc : Scale) (n : Nat) : Nat := howmany (n * sc.cblocksize) sc.blocksize
+
+def Scale.humanBytes (sc : Scale) (n : Nat) : Nat :=
+  if sc.apparent then n * sc.cblocksize else n * sc.cblocksize * 512
+
+theorem scale_default_entry (apparent : Bool) (bs size blocks : Nat) :
+    (Scale.init apparent 512 bs).entryBlocks size blocks = duUnits apparent size blocks := by
+  cases apparent <;> simp [Scale.init, Scale.entryBlocks, duUnits, howmany]
+
+theorem scale_default_display (apparent : Bool) (bs n : Nat) :
+    (Scale.init apparent 512 bs).display n = duBlocks apparent bs n := by
+  cases apparent <;> simp [Scale.init, Scale.display, duBlocks]
+
+theorem scale_default_human (apparent : Bool) (bs n : Nat) :
+    (Scale.init apparent 512 bs).humanBytes n = 512 * n := by
+  cases apparent <;> simp [Scale.init, Scale.humanBytes, Nat.mul_comm]
+
+theorem scale_default_bytes (apparent : Bool) (bs size blocks : Nat) :
+    512 * (Scale.init apparent 512 bs).entryBlocks size blocks = entryBytes apparent size blocks := by
+  rw [scale_default_entry, entryBytes_eq_duUnits]
+
+theorem scale_physical_cb (rawCb bs : Nat) :
+    (Scale.init false rawCb bs).cblocksize = howmany rawCb 512 := by
+  unfold Scale.init howmany
+  by_cases h : rawCb % 512 = 0 <;> simp [h] <;> omega
+
 theorem blocksize_1000_quirk :
     duBlocks false (getbsize (.num 1000 .none)) 16 = 16 ∧
+    (Scale.init false 512 (getbsize (.num 1000 .none))).display 16 = 16 ∧
     dushBlocks (getbsize (.num 1000 .none)) (512 * 16) = 9 := by decide
 
-/-- `BLOCKSIZE=1000 du -A -s` on a 5000-byte file prints 6 = `ceil(10 * 512 / 1000)`. -/
 theorem blocksize_1000_apparent :
     duBlocks true (getbsize (.num 1000 .none)) (duUnits true 5000 16) = 6 := by decide
 

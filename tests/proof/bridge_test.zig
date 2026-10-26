@@ -2,7 +2,8 @@ const std = @import("std");
 const dush = @import("dush");
 const accounting = dush.accounting;
 const format = dush.format;
-const InodeSet = dush.inodes.InodeSet;
+const inodes = dush.inodes;
+const InodeSet = inodes.InodeSet;
 
 const golden = @embedFile("golden");
 
@@ -10,7 +11,7 @@ const Entry = struct {
     op: usize,
     dev: u64,
     ino: u64,
-    nlink: u64,
+    nlink: i64,
     blocks: i64,
     size: i64,
 };
@@ -23,6 +24,8 @@ const Counts = struct {
     round: usize = 0,
     stat_bytes: usize = 0,
     blocks: usize = 0,
+    scale: usize = 0,
+    link_steps: usize = 0,
     traces: usize = 0,
     parallel_runs: usize = 0,
 };
@@ -33,7 +36,11 @@ fn next(it: *std.mem.TokenIterator(u8, .scalar)) !i64 {
 }
 
 fn charge(set: *InodeSet, e: Entry, apparent: bool) i64 {
-    return set.chargeFile(e.dev, e.ino, e.nlink, accounting.statBytes(e.size, e.blocks, apparent));
+    return set.chargeFile(e.dev, e.ino, e.nlink, accounting.statBytes(e.size, e.blocks, apparent)) orelse 0;
+}
+
+fn chargeUnits(set: *InodeSet, e: Entry, scale: accounting.Scale) i64 {
+    return set.chargeFile(e.dev, e.ino, e.nlink, scale.entryBlocks(e.size, e.blocks)) orelse 0;
 }
 
 const Worker = struct {
@@ -83,6 +90,13 @@ fn checkTrace(it: *std.mem.TokenIterator(u8, .scalar), counts: *Counts) !void {
         grand_total += got;
     }
     try std.testing.expectEqual(grand, grand_total);
+
+    var units_set = InodeSet.init(std.testing.allocator);
+    defer units_set.deinit();
+    const scale = accounting.Scale.init(apparent, accounting.sector, 1024);
+    var units: i64 = 0;
+    for (entries[0..n]) |e| units += chargeUnits(&units_set, e, scale);
+    try std.testing.expectEqual(grand, accounting.sector * units);
     counts.traces += 1;
 
     var workers: usize = 1;
@@ -112,10 +126,7 @@ test "src accounting and formatting match the Lean golden vectors" {
             const n = try next(&it);
             const want = it.next() orelse return error.ShortLine;
             var buf: [5]u8 = undefined;
-            std.testing.expectEqualStrings(want, format.humanize(&buf, n)) catch |err| {
-                std.debug.print("humanize({d})\n", .{n});
-                return err;
-            };
+            try std.testing.expectEqualStrings(want, format.humanize(&buf, .binary, n));
             counts.humanize += 1;
         } else if (std.mem.eql(u8, kind, "R")) {
             const n = try next(&it);
@@ -132,9 +143,29 @@ test "src accounting and formatting match the Lean golden vectors" {
             const n = try next(&it);
             try std.testing.expectEqual(try next(&it), accounting.toBlocks(n, bs));
             counts.blocks += 1;
+        } else if (std.mem.eql(u8, kind, "C")) {
+            const apparent = (try next(&it)) == 1;
+            const sc = accounting.Scale.init(apparent, try next(&it), try next(&it));
+            const size = try next(&it);
+            const blocks = try next(&it);
+            const n = try next(&it);
+            try std.testing.expectEqual(try next(&it), sc.entryBlocks(size, blocks));
+            try std.testing.expectEqual(try next(&it), sc.display(n));
+            try std.testing.expectEqual(try next(&it), sc.humanBytes(n));
+            counts.scale += 1;
+        } else if (std.mem.eql(u8, kind, "L")) {
+            const live = (try next(&it)) == 1;
+            const links = try next(&it);
+            const nlink = try next(&it);
+            const step = inodes.linkStep(live, links, nlink);
+            try std.testing.expectEqual((try next(&it)) == 1, step.skip);
+            try std.testing.expectEqual(try next(&it), step.links);
+            try std.testing.expectEqual((try next(&it)) == 1, step.live);
+            counts.link_steps += 1;
         } else if (std.mem.eql(u8, kind, "A")) {
             try checkTrace(&it, &counts);
         } else return error.UnknownVector;
     }
     try std.testing.expect(counts.humanize > 1000 and counts.round > 1000 and counts.traces > 100);
+    try std.testing.expect(counts.scale > 500 and counts.link_steps > 100 and counts.parallel_runs > 400);
 }

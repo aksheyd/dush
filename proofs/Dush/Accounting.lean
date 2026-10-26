@@ -1,23 +1,5 @@
 import Dush.Units
 
-/-!
-# Hard-link accounting, traversal order, and parallel workers
-
-`dush`'s walk charges each non-directory entry with this kernel
-(`src/walk.zig`, `src/accounting.zig`, `src/inodes.zig`):
-
-```
-if (nlink > 1 and files.seen(dev, ino)) skip else total += statBytes(size, blocks, apparent)
-```
-
-`InodeSet.seen` returns `false` for `ino == 0` without recording it, otherwise records the key
-and reports whether it was already present. Records never expire.
-
-The model below abstracts the walk into the list of entries it charges, in the order the
-calls to `seen` were linearized by the mutex, and keeps the per-entry weight `w` abstract so
-every theorem holds for both physical and `-A` charging (and for `du`'s 512-byte units).
--/
-
 namespace Dush.Acct
 
 open Dush
@@ -34,10 +16,8 @@ abbrev Key := Nat × Nat
 
 def Entry.key (e : Entry) : Key := (e.dev, e.ino)
 
-/-- Entries that go through `InodeSet.seen`: `nlink > 1` and a nonzero inode number. -/
 def Entry.tracked (e : Entry) : Bool := decide (1 < e.nlink) && decide (e.ino ≠ 0)
 
-/-- `accounting.statBytes`. -/
 def Entry.bytes (apparent : Bool) (e : Entry) : Nat := entryBytes apparent e.size e.blocks
 
 abbrev Seen := Key → Bool
@@ -60,21 +40,21 @@ def step (w : Entry → Nat) (st : State) (e : Entry) : State :=
 
 def run (w : Entry → Nat) (st : State) (es : List Entry) : State := es.foldl (step w) st
 
-/-- The accumulated total of one sequential pass over `es` with an empty inode set. -/
 def total (w : Entry → Nat) (es : List Entry) : Nat := (run w ⟨Seen.empty, 0⟩ es).total
 
-/-- Two sightings of one inode agree on its link count and size. True of any snapshot of a
-file system; without it the order can matter (see `order_matters_without_consistency`). -/
 def Consistent (w : Entry → Nat) (es : List Entry) : Prop :=
-  ∀ e ∈ es, ∀ e' ∈ es, e.key = e'.key → e.tracked = e'.tracked ∧ w e = w e'
+  ∀ e ∈ es, ∀ e' ∈ es, e.key = e'.key → e.nlink = e'.nlink ∧ w e = w e'
+
+theorem tracked_of_key {x y : Entry} (hk : x.key = y.key) (hn : x.nlink = y.nlink) :
+    x.tracked = y.tracked := by
+  simp only [Entry.key, Prod.mk.injEq] at hk
+  simp [Entry.tracked, hk.2, hn]
 
 theorem run_cons (w : Entry → Nat) (st : State) (e : Entry) (es : List Entry) :
     run w st (e :: es) = run w (step w st e) es := rfl
 
-/-! ## (a) Order independence -/
-
 theorem step_comm (w : Entry → Nat) (z : State) (x y : Entry)
-    (hc : x.key = y.key → x.tracked = y.tracked ∧ w x = w y) :
+    (hc : x.key = y.key → x.nlink = y.nlink ∧ w x = w y) :
     step w (step w z x) y = step w (step w z y) x := by
   obtain ⟨s, t⟩ := z
   simp only [step, State.mk.injEq]
@@ -83,29 +63,25 @@ theorem step_comm (w : Entry → Nat) (z : State) (x y : Entry)
     simp only [mark]
     by_cases hx : x.tracked <;> by_cases hy : y.tracked <;> simp [hx, hy, Seen.add, Bool.or_left_comm]
   · by_cases hk : x.key = y.key
-    · obtain ⟨ht, hw⟩ := hc hk
+    · obtain ⟨hn, hw⟩ := hc hk
+      have ht := tracked_of_key hk hn
       simp only [charge, mark, hk, ht, hw]
     · have hk' : y.key ≠ x.key := fun h => hk h.symm
       simp only [charge, mark]
       by_cases hx : x.tracked <;> by_cases hy : y.tracked <;> simp [hx, hy, Seen.add, hk, hk']
       all_goals omega
 
-/-- (a) The total does not depend on the traversal order. -/
 theorem total_perm (w : Entry → Nat) {l₁ l₂ : List Entry} (hp : l₁.Perm l₂)
     (hc : Consistent w l₁) : total w l₁ = total w l₂ := by
   unfold total run
   rw [List.Perm.foldl_eq' hp (fun x hx y hy z => step_comm w z x y (hc x hx y hy))]
 
-/-- Consistency is needed: one inode reported with two different sizes. -/
 theorem order_matters_without_consistency :
     let a : Entry := ⟨1, 7, 2, 8, 0⟩
     let b : Entry := ⟨1, 7, 2, 16, 0⟩
     total (Entry.bytes false) [a, b] ≠ total (Entry.bytes false) [b, a] := by
   decide
 
-/-! ## (b) Each inode is counted exactly once -/
-
-/-- The entries that are charged, in order, starting from inode set `s`. -/
 def countedAux (s : Seen) : List Entry → List Entry
   | [] => []
   | e :: es => if e.tracked && s e.key then countedAux s es else e :: countedAux (mark s e) es
@@ -133,7 +109,6 @@ theorem run_total_aux (w : Entry → Nat) (es : List Entry) :
         · simp [Seen.add, hk]
       rw [this, ih]; omega
 
-/-- The total is the sum of the weights of the charged entries. -/
 theorem total_eq_counted (w : Entry → Nat) (es : List Entry) :
     total w es = ((counted es).map w).sum := by
   unfold total counted; rw [run_total_aux]; omega
@@ -147,7 +122,6 @@ theorem countedAux_sublist (s : Seen) (es : List Entry) : (countedAux s es).Subl
     · exact List.Sublist.cons e (ih s)
     · exact List.Sublist.cons_cons e (ih _)
 
-/-- Charged entries are entries of the traversal, in traversal order. -/
 theorem counted_sublist (es : List Entry) : (counted es).Sublist es := countedAux_sublist _ es
 
 theorem countedAux_untracked (s : Seen) (es : List Entry) :
@@ -162,7 +136,6 @@ theorem countedAux_untracked (s : Seen) (es : List Entry) :
       · simp [ht, ih]
       · simp [ht, ih]
 
-/-- Every entry with `nlink ≤ 1` or inode 0 is charged. -/
 theorem counted_untracked (es : List Entry) :
     (counted es).filter (fun e => !e.tracked) = es.filter (fun e => !e.tracked) :=
   countedAux_untracked _ es
@@ -202,17 +175,9 @@ theorem countedAux_once (s : Seen) (k : Key) (es : List Entry) :
         have hf : isInode k e = false := by simpa using hm
         simp [hmk, hf]
 
-/-- (b) Every inode that appears with `nlink > 1` is charged exactly once, no matter how many
-hard links to it the traversal meets. -/
 theorem counted_once (k : Key) (es : List Entry) (h : es.any (isInode k)) :
     (counted es).countP (isInode k) = 1 := by
   unfold counted; rw [countedAux_once]; simp [Seen.empty, h]
-
-/-! ## Parallel workers
-
-Each worker keeps a private `local_bytes` and adds it into the shared atomic total once
-(`fetchAdd`). The shared `InodeSet` is protected by a mutex, so its calls happen in some
-total order. A `trace` lists `(worker, entry)` in that order. -/
 
 def chargesAux (w : Entry → Nat) (s : Seen) : List Entry → List Nat
   | [] => []
@@ -225,7 +190,6 @@ theorem run_total_charges (w : Entry → Nat) (es : List Entry) :
   | cons e es ih =>
     intro s t; rw [run_cons]; simp only [step, chargesAux, List.sum_cons]; rw [ih]; omega
 
-/-- `rsum n f = f 0 + … + f (n - 1)`. -/
 def rsum : Nat → (Nat → Nat) → Nat
   | 0, _ => 0
   | n + 1, f => rsum n f + f n
@@ -254,7 +218,6 @@ theorem rsum_indicator (n t c : Nat) (h : t < n) :
       simp [this]
     · rw [ih (by omega)]; simp [ht]
 
-/-- What worker `i` adds to the shared total. -/
 def partialSum (tagged : List (Nat × Nat)) (i : Nat) : Nat :=
   ((tagged.filter (fun p => p.1 = i)).map Prod.snd).sum
 
@@ -278,7 +241,6 @@ theorem rsum_partial (n : Nat) (tagged : List (Nat × Nat)) (h : ∀ p ∈ tagge
     rw [hsplit, rsum_add, rsum_indicator n t c (h _ List.mem_cons_self), ih hps]
     simp
 
-/-- The tagged per-step charges of a trace. -/
 def tagCharges (w : Entry → Nat) (trace : List (Nat × Entry)) : List (Nat × Nat) :=
   (trace.map Prod.fst).zip (chargesAux w Seen.empty (trace.map Prod.snd))
 
@@ -288,7 +250,6 @@ theorem length_chargesAux (w : Entry → Nat) (s : Seen) (es : List Entry) :
   | nil => rfl
   | cons e es ih => simp [chargesAux, ih]
 
-/-- The sum of the per-worker partial totals equals one sequential pass over the trace. -/
 theorem workers_sum (w : Entry → Nat) (n : Nat) (trace : List (Nat × Entry))
     (htag : ∀ p ∈ trace, p.1 < n) :
     rsum n (partialSum (tagCharges w trace)) = total w (trace.map Prod.snd) := by
@@ -303,8 +264,6 @@ theorem workers_sum (w : Entry → Nat) (n : Nat) (trace : List (Nat × Entry))
     obtain ⟨q, hq, hqe⟩ := List.mem_map.mp this.1
     rw [← hqe]; exact htag q hq
 
-/-- (a) for `N` workers: however the traversal is split across workers and interleaved,
-the merged total equals the sequential total of the traversal in any order. -/
 theorem parallel_eq_sequential (w : Entry → Nat) (n : Nat) (trace : List (Nat × Entry))
     (traversal : List Entry) (htag : ∀ p ∈ trace, p.1 < n)
     (hperm : (trace.map Prod.snd).Perm traversal) (hc : Consistent w traversal) :
