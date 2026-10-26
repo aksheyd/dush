@@ -1,4 +1,8 @@
-test: no-comments zig-test du-suite frozen-bsd freeze-check readme-check
+test: checks frozen
+
+checks: no-comments zig-test du-suite freeze-check readme-check
+
+frozen: frozen-bsd frozen-gnu
 
 no-comments:
     zig run check/comments.zig
@@ -13,6 +17,10 @@ frozen-bsd:
     make dush
     DUSH_BIN="$PWD/dush" zig test frozen/bsd/du_test.zig
 
+frozen-gnu:
+    make dush
+    DUSH_BIN="$PWD/dush" zig test frozen/gnu/all.zig
+
 freeze-check:
     zig run frozen/freeze.zig
 
@@ -22,6 +30,3 @@ readme-check:
 record-bench:
     make bench
     zig run bench/readme.zig -- record
-
-frozen-gnu:
-    zig test frozen/gnu/all.zig

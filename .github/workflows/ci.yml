@@ -20,5 +20,13 @@ jobs:
 
       - uses: extractions/setup-just@v4
 
-      - name: just test
-        run: just test
+      - name: just checks
+        run: just checks
+
+      - name: just frozen-bsd
+        if: ${{ !cancelled() }}
+        run: just frozen-bsd
+
+      - name: just frozen-gnu
+        if: ${{ !cancelled() }}
+        run: just frozen-gnu
