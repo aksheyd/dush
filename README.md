@@ -116,7 +116,7 @@ make bench  # Runs hermetic hyperfine benchmark suite (uses native Zig generator
 
 `tests/upstream/` holds the FreeBSD, Apple and GNU coreutils `du` test scripts copied verbatim. `just upstream-bsd` runs the ATF scripts under kyua and `just upstream-gnu` runs the coreutils scripts with their own harness, both with `du` resolving to `dush`; see [tests/upstream/README.md](tests/upstream/README.md).
 
-Not every upstream case passes against `/usr/bin/du` itself: GNU tests use GNU-only options, and a few FreeBSD tests assume UFS/ZFS sizes. Each suite has an `EXPECTED` file listing the outcomes `/usr/bin/du` gets, with a reason per non-pass. A suite passes when `dush` gets exactly those outcomes, so a new failure and an unexpected pass both fail CI; skips are counted and checked too. To check a baseline itself, run the suite with `DUSH_BIN=/usr/bin/du`.
+Not every upstream case passes against `/usr/bin/du` itself: GNU tests use GNU-only options, and a few FreeBSD tests assume UFS/ZFS sizes. Each suite has an `EXPECTED` file listing the outcomes `/usr/bin/du` gets, with a reason per non-pass. A suite passes when `dush` gets exactly those outcomes, so a new failure and an unexpected pass both fail CI; skips are counted and checked too. To check a baseline itself, run the suite with `DUSH_BIN=/usr/bin/du`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the merge gate and `just bench-compare`.
 
 ### Layout
 
