@@ -183,9 +183,7 @@ fn scanDirPosixFallback(
         const dev: u64 = @intCast(st.dev);
 
         if (!is_dir) {
-            if (st.nlink > 1 and ctx.files.visit(dev, st.ino, st.nlink)) continue;
-            const size: i64 = accounting.statBytes(st.size, st.blocks, ctx.apparent);
-            local_bytes.* += size;
+            local_bytes.* += ctx.files.chargeFile(dev, st.ino, st.nlink, accounting.statBytes(st.size, st.blocks, ctx.apparent)) orelse 0;
         } else {
             if (std.mem.eql(u8, name, "fd") and onDevfs(dirfd, name_z)) continue;
             const size: i64 = accounting.statBytes(st.size, st.blocks, ctx.apparent);
@@ -391,9 +389,7 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         allocsize = accounting.roundUp512(allocsize);
                     }
 
-                    if (linkcount > 1 and ctx.files.visit(current.dev, fileid, linkcount)) {} else {
-                        local_bytes += allocsize;
-                    }
+                    local_bytes += ctx.files.chargeFile(current.dev, fileid, linkcount, allocsize) orelse 0;
                 }
 
                 offset = entry_start + entry_len;
@@ -464,8 +460,7 @@ pub fn scanTarget(
     const dev: u64 = @bitCast(@as(i64, st.dev));
 
     if (!is_dir) {
-        if (st.nlink > 1 and links.files.visit(dev, st.ino, st.nlink)) return .{};
-        const n = cfg.scale.entryBlocks(st.size, st.blocks);
+        const n = links.files.chargeFile(dev, st.ino, st.nlink, cfg.scale.entryBlocks(st.size, st.blocks)) orelse return .{};
         return .{ .blocks = n, .counted = true, .printable = true };
     }
 

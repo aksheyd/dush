@@ -89,4 +89,9 @@ pub const InodeSet = struct {
         self.count += 1;
         return step.skip;
     }
+
+    pub fn chargeFile(self: *InodeSet, dev: u64, ino: u64, nlink: i64, amount: i64) ?i64 {
+        if (nlink > 1 and self.visit(dev, ino, nlink)) return null;
+        return amount;
+    }
 };

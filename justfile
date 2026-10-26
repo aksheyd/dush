@@ -41,6 +41,13 @@ upstream-gnu:
     make dush
     DUSH_BIN="${DUSH_BIN:-$PWD/dush}" sh tools/upstream_gnu.sh
 
+proof:
+    cd proofs && lake build --wfail
+    ! grep -rnwE --include='*.lean' 'sorry|admit|axiom|native_decide|implemented_by|extern' proofs/Dush proofs/Dush.lean proofs/Ref.lean
+    cd proofs && lake env lean Audit.lean
+    cd proofs && lake exe dushref > .lake/golden.txt && cmp .lake/golden.txt vectors/golden.txt
+    zig build proof-bridge
+
 freeze-check:
     zig run tools/freeze.zig
 

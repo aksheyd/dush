@@ -26,6 +26,26 @@ jobs:
       - name: just checks
         run: just checks
 
+      - name: cache lean toolchain and proof build
+        if: ${{ !cancelled() }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            proofs/.lake
+          key: lean-${{ runner.os }}-${{ hashFiles('proofs/lean-toolchain', 'proofs/lakefile.toml', 'proofs/lake-manifest.json') }}-${{ hashFiles('proofs/**/*.lean') }}
+          restore-keys: |
+            lean-${{ runner.os }}-${{ hashFiles('proofs/lean-toolchain', 'proofs/lakefile.toml', 'proofs/lake-manifest.json') }}-
+
+      - name: just proof
+        if: ${{ !cancelled() }}
+        run: |
+          if ! command -v elan >/dev/null && [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          fi
+          export PATH="$HOME/.elan/bin:$PATH"
+          just proof
+
       - name: just frozen-bsd
         if: ${{ !cancelled() }}
         run: just frozen-bsd

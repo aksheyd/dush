@@ -11,6 +11,7 @@
         "tests",
         "tools",
         "assets",
+        "proofs",
         "Makefile",
         "README.md",
         "LICENSE",
