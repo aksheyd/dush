@@ -1,12 +1,3 @@
-// Synthetic directory tree generator for dush benchmarking in Zig.
-//
-// Creates a deterministic directory tree with:
-// - Multi-level directory hierarchies
-// - Thousands of files with pseudo-random allocation sizes
-// - Sparse files (zero-filled extents via ftruncate)
-// - Deep directory recursion chains (path length & stack depth testing)
-// - Hardlinked files (verifying inode deduplication)
-// - Relative and dangling symbolic links (verifying symlink traversal rules)
 
 const std = @import("std");
 
@@ -83,7 +74,6 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
-    // Clean existing destination
     const rm_res = std.process.run(allocator, init.io, .{
         .argv = &.{ "rm", "-rf", dest },
     }) catch null;
@@ -101,7 +91,6 @@ pub fn main(init: std.process.Init) !u8 {
     var sparse_buf: [4096]u8 = undefined;
     @memset(&sparse_buf, 'x');
 
-    // 1. Broad directory hierarchy
     var i: usize = 0;
     while (i < top_dirs) : (i += 1) {
         var top_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -158,7 +147,6 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
-    // 2. Deep recursion (25 levels deep)
     var cur_deep_buf: [std.fs.max_path_bytes]u8 = undefined;
     var cur_deep_len = (try std.fmt.bufPrint(&cur_deep_buf, "{s}/deep", .{dest})).len;
     cur_deep_buf[cur_deep_len] = 0;
@@ -184,7 +172,6 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
-    // 3. Hardlink edge case
     var hl_src_buf: [std.fs.max_path_bytes]u8 = undefined;
     const hl_src = try std.fmt.bufPrint(&hl_src_buf, "{s}/d000/f0000", .{dest});
     hl_src_buf[hl_src.len] = 0;
@@ -197,7 +184,6 @@ pub fn main(init: std.process.Init) !u8 {
         total_files += 1;
     }
 
-    // 4. Symlinks
     var sym_dir_src: [std.fs.max_path_bytes]u8 = undefined;
     const sds = try std.fmt.bufPrint(&sym_dir_src, "{s}/d001", .{dest});
     sym_dir_src[sds.len] = 0;

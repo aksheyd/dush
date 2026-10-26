@@ -1,5 +1,3 @@
-// Comprehensive test suite for `dush` written in Zig.
-// Validates behavioral and numerical equivalence between `dush` and macOS `du -sh`.
 
 const std = @import("std");
 
@@ -73,9 +71,6 @@ fn assertOutputParity(allocator: std.mem.Allocator, dush_out: []const u8, du_out
     try std.testing.expectEqualStrings(norm_du, norm_dush);
 }
 
-// ---------------------------------------------------------------------------
-// Parity Tests
-// ---------------------------------------------------------------------------
 
 test "parity: default dot" {
     const allocator = std.testing.allocator;
@@ -127,7 +122,6 @@ test "parity: multiple arguments" {
     try tmp.dir.createDirPath(io, "dir1");
     try tmp.dir.createDirPath(io, "dir2");
 
-    // Populate files
     var fbuf: [std.fs.max_path_bytes]u8 = undefined;
     const sub_f1 = try std.fmt.bufPrint(&fbuf, "{s}/test.bin", .{d1_p});
     const sub_f1_z = try allocator.dupeZ(u8, sub_f1);
@@ -284,7 +278,6 @@ test "parity: apparent size (-A) and odd sizes" {
 
     var pbuf: [std.fs.max_path_bytes]u8 = undefined;
 
-    // 10MB sparse file
     const sp = try std.fmt.bufPrint(&pbuf, "{s}/sparse.bin", .{root_path});
     const sp_z = try allocator.dupeZ(u8, sp);
     defer allocator.free(sp_z);
@@ -294,7 +287,6 @@ test "parity: apparent size (-A) and odd sizes" {
         _ = close(fd1);
     }
 
-    // Odd-sized file (1000 bytes)
     const op = try std.fmt.bufPrint(&pbuf, "{s}/odd.bin", .{root_path});
     const op_z = try allocator.dupeZ(u8, op);
     defer allocator.free(op_z);
@@ -389,7 +381,6 @@ test "parity: symbolic links (-P, -L, -H)" {
     defer allocator.free(link_z);
     _ = symlink(target_z, link_z);
 
-    // 1. Default -P (do not follow)
     {
         const r1 = try runCmd(allocator, &.{ dush_bin, link_p });
         defer r1.deinit(allocator);
@@ -400,7 +391,6 @@ test "parity: symbolic links (-P, -L, -H)" {
         try assertOutputParity(allocator, r1.stdout, r2.stdout);
     }
 
-    // 2. -L (follow all)
     {
         const r1 = try runCmd(allocator, &.{ dush_bin, "-L", link_p });
         defer r1.deinit(allocator);
@@ -411,7 +401,6 @@ test "parity: symbolic links (-P, -L, -H)" {
         try assertOutputParity(allocator, r1.stdout, r2.stdout);
     }
 
-    // 3. -H (follow command-line link)
     {
         const r1 = try runCmd(allocator, &.{ dush_bin, "-H", link_p });
         defer r1.deinit(allocator);

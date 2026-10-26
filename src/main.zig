@@ -1,27 +1,8 @@
-// dush - An ultra-fast drop-in replacement for `du -sh` on macOS.
-//
-// Performance Architecture:
-// 1. macOS getattrlistbulk(2): Reads directory entries and metadata in 64KB batches.
-//    fstatat runs when the bulk result omits a size, and for every entry in -A mode.
-// 2. Parallel Work-Stealing: Worker threads traverse subdirectories in parallel
-//    with thread-local queues and lock-free batch spilling to feed idle workers.
-//    The default worker count is the Apple Silicon performance-core count when
-//    that is a smaller subset of the logical CPUs. Efficiency cores slow this walk.
-// 3. Thread-Local Accumulation: Workers accumulate sizes in local variables and
-//    merge once into the atomic total, eliminating atomic contention in file loops.
-// 4. Fast Hardlink Deduplication: (dev, ino) tracking is only consulted when
-//    st_nlink > 1, so 99.9% of files bypass mutexes completely.
-// 5. Zero-allocation for files: Path strings are only allocated for subdirectories.
-// 6. 100% BSD Fidelity: Exact humanize_number formatting matching macOS `du -sh`.
-// 7. POSIX Fallback: Automatically falls back to readdir/fstatat on non-bulk filesystems.
 
 const std = @import("std");
 
 const VERSION = "1.0.0";
 
-// ---------------------------------------------------------------------------
-// macOS getattrlistbulk constants & structures
-// ---------------------------------------------------------------------------
 
 pub const ATTR_BIT_MAP_COUNT: u16 = 5;
 pub const ATTR_CMN_NAME: u32 = 0x00000001;
@@ -39,7 +20,6 @@ pub const ATTR_DIR_DATALENGTH: u32 = 0x00000020;
 
 pub const VREG: u32 = 1;
 pub const VDIR: u32 = 2;
-// Darwin vtype: VNON=0, VREG=1, VDIR=2, VBLK=3, VCHR=4, VLNK=5.
 pub const VLNK: u32 = 5;
 
 pub const AttrList = extern struct {
@@ -74,9 +54,6 @@ const EACCES: c_int = 13;
 const ENOTSUP: c_int = 45;
 const EINVAL: c_int = 22;
 
-// ---------------------------------------------------------------------------
-// Thread Synchronization Primitives
-// ---------------------------------------------------------------------------
 
 const Mutex = struct {
     inner: std.c.pthread_mutex_t = std.c.PTHREAD_MUTEX_INITIALIZER,
@@ -106,9 +83,6 @@ const Condition = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Options
-// ---------------------------------------------------------------------------
 
 pub const FollowMode = enum { none, cli, all };
 
@@ -120,10 +94,6 @@ pub const Options = struct {
     num_threads: usize = 8,
 };
 
-// ---------------------------------------------------------------------------
-// BSD humanize_number implementation
-// Guarantees 100% byte fidelity with macOS `du -h` ("0B", "1.0K", "49K", "1.5M", "10G")
-// ---------------------------------------------------------------------------
 
 pub fn humanize(out: *[5]u8, bytes: i64) []const u8 {
     const divisor: i64 = 1024;
@@ -174,9 +144,6 @@ pub fn humanize(out: *[5]u8, bytes: i64) []const u8 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Path Utilities
-// ---------------------------------------------------------------------------
 
 pub const Path = struct {
     bytes: [:0]u8,
@@ -213,9 +180,6 @@ pub fn dupePathZ(allocator: std.mem.Allocator, s: []const u8) !Path {
     return .{ .bytes = buf };
 }
 
-// ---------------------------------------------------------------------------
-// InodeSet (Thread-safe deduplication table)
-// ---------------------------------------------------------------------------
 
 pub const InodeKey = struct {
     dev: u64,
@@ -254,7 +218,6 @@ pub const InodeSet = struct {
             @memset(self.keys, .{ .dev = 0, .ino = 0 });
         }
 
-        // Grow if load factor >= 0.65
         if (self.count * 3 >= self.keys.len * 2) {
             const new_cap = self.keys.len * 2;
             if (self.allocator.alloc(InodeKey, new_cap)) |new_keys| {
@@ -289,9 +252,6 @@ pub const InodeSet = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Dynamic Work Queue
-// ---------------------------------------------------------------------------
 
 pub const WorkItem = struct {
     path: Path,
@@ -354,7 +314,6 @@ pub const WorkQueue = struct {
 
         while (self.count + batch.len > self.items.len) {
             if (!self.grow()) {
-                // Drop if OOM
                 for (batch) |item| item.path.deinit(self.allocator);
                 return;
             }
@@ -406,9 +365,6 @@ pub const WorkQueue = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Traversal Worker Context & Functions
-// ---------------------------------------------------------------------------
 
 pub const WorkerContext = struct {
     allocator: std.mem.Allocator,
@@ -572,7 +528,6 @@ pub fn workerFn(ctx: *WorkerContext) void {
             const ret = getattrlistbulk(dirfd, &attrList, &buf, buf.len, 0);
             if (ret < 0) {
                 if (bulk_attempts == 0 and (__error().* == ENOTSUP or __error().* == EINVAL)) {
-                    // Filesystem does not support getattrlistbulk; fall back to POSIX readdir/fstatat
                     scanDirPosixFallback(ctx, dirfd, parent_slice, current.dev, &local_bytes, &spill, &spill_count);
                     dirfd = -1; // Closed by scanDirPosixFallback
                 }
@@ -626,15 +581,11 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         allocsize = readI64(buf[offset..].ptr);
                         offset += 8;
                     }
-                    // Physical size uses the bulk value when the filesystem returned it.
-                    // Apparent size always comes from stat: FAT32 can return a logical
-                    // length that is not du -A's 512-byte rounding.
                     if (ctx.opts.apparent or !have_dir_size) {
                         allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
                     }
 
                     if (linkcount > 1 and ctx.dirs.seen(current.dev, fileid)) {
-                        // Directory hard link / cycle already visited
                     } else {
                         local_bytes += allocsize;
 
@@ -656,7 +607,6 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         }
                     }
                 } else if (obj_type == VLNK and ctx.opts.follow == .all) {
-                    // -L: follow symlinks
                     var st: std.c.Stat = undefined;
                     var name_zbuf: [1024:0]u8 = undefined;
                     if (name_slice.len + 1 <= name_zbuf.len) {
@@ -698,7 +648,6 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         }
                     }
                 } else {
-                    // Regular file, symlink without -L, socket, fifo, device
                     if ((ret_file & ATTR_FILE_LINKCOUNT) != 0) {
                         linkcount = readU32(buf[offset..].ptr);
                         offset += 4;
@@ -713,7 +662,6 @@ pub fn workerFn(ctx: *WorkerContext) void {
                     }
 
                     if (linkcount > 1 and ctx.files.seen(current.dev, fileid)) {
-                        // Already counted this inode
                     } else {
                         local_bytes += allocsize;
                     }
@@ -743,9 +691,6 @@ pub fn workerFn(ctx: *WorkerContext) void {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Scan Target
-// ---------------------------------------------------------------------------
 
 pub const ScanResult = struct {
     bytes: i64,
@@ -783,7 +728,6 @@ pub fn scanTarget(
         return .{ .bytes = size, .err = false };
     }
 
-    // Target is a directory
     var total_bytes = std.atomic.Value(i64).init(
         if (opts.apparent)
             (@divTrunc(st.size + 511, 512)) * 512
@@ -844,9 +788,6 @@ pub fn scanTarget(
     return .{ .bytes = total_bytes.load(.monotonic), .err = had_error.load(.monotonic) };
 }
 
-// ---------------------------------------------------------------------------
-// Output Formatting
-// ---------------------------------------------------------------------------
 
 pub fn printResult(bytes: i64, label: []const u8, opts: *const Options) void {
     var line_buf: [2048]u8 = undefined;
@@ -922,9 +863,6 @@ fn defaultThreads() usize {
     return defaultThreadCount(performanceCoreCount(), logical);
 }
 
-// ---------------------------------------------------------------------------
-// Main Entry Point
-// ---------------------------------------------------------------------------
 
 pub fn main(init: std.process.Init) u8 {
     const allocator = init.gpa;
@@ -955,7 +893,6 @@ pub fn main(init: std.process.Init) u8 {
             } else if (std.mem.eql(u8, arg, "--apparent-size")) {
                 opts.apparent = true;
             } else if (std.mem.eql(u8, arg, "--summary") or std.mem.eql(u8, arg, "--human-readable")) {
-                // Default options
             } else if (std.mem.eql(u8, arg, "--threads")) {
                 if (it.next()) |val| {
                     if (std.fmt.parseInt(usize, val, 10)) |t| {
@@ -1040,9 +977,6 @@ pub fn main(init: std.process.Init) u8 {
     return exit_code;
 }
 
-// ---------------------------------------------------------------------------
-// Unit Tests (`zig build test`)
-// ---------------------------------------------------------------------------
 
 test "humanize matches du -h formatting" {
     var buf: [5]u8 = undefined;
