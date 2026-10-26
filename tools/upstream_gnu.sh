@@ -25,6 +25,7 @@ printf '#define HAVE_OPENAT 1\n' > "$stage/config.h"
 built=$(ls "$gnubin" | tr '\n' ' ')
 echo "upstream-gnu: du is $dush; coreutils $version tests; other tools from $gnubin"
 pass=0 fail=0 skip=0 error=0
+: > "$work/results"
 for t in "$gnu"/tests/du/*.sh "$gnu"/tests/du/*.pl; do
   name=tests/du/${t##*/}
   log=$work/logs/${t##*/}.log
@@ -55,9 +56,10 @@ for t in "$gnu"/tests/du/*.sh "$gnu"/tests/du/*.pl; do
     *) result=FAIL fail=$((fail + 1)) ;;
   esac
   echo "$result: $name"
+  echo "$result: $name" >> "$work/results"
   case $result in
     FAIL | ERROR) test -n "${UPSTREAM_VERBOSE:-}" && sed 's/^/    /' "$log" ;;
   esac
 done
 echo "upstream-gnu: $pass pass, $fail fail, $skip skip, $error error"
-test $((fail + error)) -eq 0
+sh "$root/tools/baseline.sh" "$gnu/EXPECTED" "$work/results"

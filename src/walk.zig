@@ -2,7 +2,8 @@ const std = @import("std");
 const sys = @import("sys.zig");
 const errors = @import("errors.zig");
 const accounting = @import("accounting.zig");
-const Options = @import("cli.zig").Options;
+const Config = @import("cli.zig").Config;
+const fts_walk = @import("fts_walk.zig");
 const InodeSet = @import("inodes.zig").InodeSet;
 const paths = @import("path.zig");
 const Path = paths.Path;
@@ -127,7 +128,7 @@ pub const WorkerContext = struct {
     queue: *WorkQueue,
     files: *InodeSet,
     dirs: *InodeSet,
-    opts: *const Options,
+    apparent: bool,
     total_bytes: *std.atomic.Value(i64),
     had_error: *std.atomic.Value(bool),
 };
@@ -162,7 +163,7 @@ fn scanDirPosixFallback(
     defer _ = std.c.closedir(dir);
     _ = dir_dev;
 
-    const flags: u32 = if (ctx.opts.follow == .all) 0 else std.posix.AT.SYMLINK_NOFOLLOW;
+    const flags: u32 = std.posix.AT.SYMLINK_NOFOLLOW;
 
     while (std.c.readdir(dir)) |de| {
         const namlen: usize = de.namlen;
@@ -182,13 +183,16 @@ fn scanDirPosixFallback(
         const dev: u64 = @intCast(st.dev);
 
         if (!is_dir) {
-            if (st.nlink > 1 and ctx.files.seen(dev, st.ino)) continue;
-            const size: i64 = accounting.statBytes(st.size, st.blocks, ctx.opts.apparent);
+            if (st.nlink > 1 and ctx.files.visit(dev, st.ino, st.nlink)) continue;
+            const size: i64 = accounting.statBytes(st.size, st.blocks, ctx.apparent);
             local_bytes.* += size;
         } else {
-            if (ctx.dirs.seen(dev, st.ino)) continue;
-            const size: i64 = accounting.statBytes(st.size, st.blocks, ctx.opts.apparent);
+            if (std.mem.eql(u8, name, "fd") and onDevfs(dirfd, name_z)) continue;
+            const size: i64 = accounting.statBytes(st.size, st.blocks, ctx.apparent);
             local_bytes.* += size;
+            if (dirLinkCountAt(dirfd, name_z)) |n| {
+                if (n != 1 and ctx.dirs.visit(dev, st.ino, n)) continue;
+            }
 
             if (joinPath(ctx.allocator, dir_path, name)) |child_path| {
                 spill[spill_count.*] = .{ .path = child_path, .dev = dev, .size = size };
@@ -202,6 +206,22 @@ fn scanDirPosixFallback(
             }
         }
     }
+}
+
+fn dirLinkCountAt(dirfd: c_int, name: [*:0]const u8) ?u32 {
+    var attrs: sys.AttrList = .{ .dirattr = sys.ATTR_DIR_LINKCOUNT };
+    var buf: extern struct { size: u32, linkcount: u32 } = undefined;
+    if (sys.getattrlistat(dirfd, name, &attrs, &buf, @sizeOf(@TypeOf(buf)), sys.FSOPT_NOFOLLOW) == -1) return null;
+    return buf.linkcount;
+}
+
+fn onDevfs(dirfd: c_int, name: [*:0]const u8) bool {
+    const fd = std.c.openat(dirfd, name, .{ .DIRECTORY = true, .NOFOLLOW = true });
+    if (fd < 0) return false;
+    defer _ = sys.close(fd);
+    var buf: sys.StatfsBuf align(8) = undefined;
+    if (sys.fstatfs(fd, &buf) < 0) return false;
+    return std.mem.eql(u8, std.mem.sliceTo(buf[sys.statfs_fstypename_offset..][0..16], 0), "devfs");
 }
 
 fn allocatedSizeAt(dirfd: c_int, name: []const u8, apparent: bool) i64 {
@@ -219,7 +239,7 @@ pub fn workerFn(ctx: *WorkerContext) void {
         .bitmapcount = sys.ATTR_BIT_MAP_COUNT,
         .commonattr = sys.ATTR_CMN_RETURNED_ATTRS | sys.ATTR_CMN_NAME | sys.ATTR_CMN_OBJTYPE | sys.ATTR_CMN_FILEID,
     };
-    if (ctx.opts.apparent) {
+    if (ctx.apparent) {
         attrList.fileattr = sys.ATTR_FILE_DATALENGTH | sys.ATTR_FILE_LINKCOUNT;
         attrList.dirattr = sys.ATTR_DIR_DATALENGTH | sys.ATTR_DIR_LINKCOUNT;
     } else {
@@ -325,14 +345,19 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         offset += 8;
                     }
                     if (!have_dir_size) {
-                        allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
-                    } else if (ctx.opts.apparent) {
+                        allocsize = allocatedSizeAt(dirfd, name_slice, ctx.apparent);
+                    } else if (ctx.apparent) {
                         allocsize = accounting.roundUp512(allocsize);
                     }
 
-                    if (linkcount > 1 and ctx.dirs.seen(current.dev, fileid)) {} else {
-                        local_bytes += allocsize;
-
+                    var name_zbuf: [3:0]u8 = undefined;
+                    const is_fd = std.mem.eql(u8, name_slice, "fd") and blk: {
+                        @memcpy(name_zbuf[0..2], name_slice);
+                        name_zbuf[2] = 0;
+                        break :blk onDevfs(dirfd, &name_zbuf);
+                    };
+                    if (!is_fd) local_bytes += allocsize;
+                    if (is_fd or (linkcount != 1 and ctx.dirs.visit(current.dev, fileid, linkcount))) {} else {
                         if (joinPath(ctx.allocator, parent_slice, name_slice)) |child_path| {
                             const child_item = WorkItem{ .path = child_path, .dev = current.dev, .size = allocsize };
                             if (ctx.queue.idle_workers.load(.monotonic) > 0 or local_top >= LOCAL_STACK_CAP) {
@@ -350,42 +375,6 @@ pub fn workerFn(ctx: *WorkerContext) void {
                             ctx.had_error.store(true, .monotonic);
                         }
                     }
-                } else if (obj_type == sys.VLNK and ctx.opts.follow == .all) {
-                    var st: std.c.Stat = undefined;
-                    var name_zbuf: [1024:0]u8 = undefined;
-                    if (name_slice.len + 1 <= name_zbuf.len) {
-                        @memcpy(name_zbuf[0..name_slice.len], name_slice);
-                        name_zbuf[name_slice.len] = 0;
-                        if (std.c.fstatat(dirfd, &name_zbuf, &st, 0) == 0) {
-                            const dev: u64 = @intCast(st.dev);
-                            const is_target_dir = (st.mode & 0o170000) == 0o040000;
-                            if (is_target_dir) {
-                                if (!ctx.dirs.seen(dev, st.ino)) {
-                                    const dir_size: i64 = accounting.statBytes(st.size, st.blocks, ctx.opts.apparent);
-                                    local_bytes += dir_size;
-
-                                    if (joinPath(ctx.allocator, parent_slice, name_slice)) |child_path| {
-                                        const child_item = WorkItem{ .path = child_path, .dev = dev, .size = dir_size };
-                                        if (ctx.queue.idle_workers.load(.monotonic) > 0 or local_top >= LOCAL_STACK_CAP) {
-                                            spill[spill_count] = child_item;
-                                            spill_count += 1;
-                                            if (spill_count == BATCH_SPILL_CAP) {
-                                                ctx.queue.pushBatch(spill[0..spill_count]);
-                                                spill_count = 0;
-                                            }
-                                        } else {
-                                            local_stack[local_top] = child_item;
-                                            local_top += 1;
-                                        }
-                                    } else |_| {}
-                                }
-                            } else {
-                                if (st.nlink <= 1 or !ctx.files.seen(dev, st.ino)) {
-                                    local_bytes += accounting.statBytes(st.size, st.blocks, ctx.opts.apparent);
-                                }
-                            }
-                        }
-                    }
                 } else {
                     if ((ret_file & sys.ATTR_FILE_LINKCOUNT) != 0) {
                         linkcount = readU32(buf[offset..].ptr);
@@ -397,12 +386,12 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         offset += 8;
                     }
                     if (!have_file_size) {
-                        allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
-                    } else if (ctx.opts.apparent) {
+                        allocsize = allocatedSizeAt(dirfd, name_slice, ctx.apparent);
+                    } else if (ctx.apparent) {
                         allocsize = accounting.roundUp512(allocsize);
                     }
 
-                    if (linkcount > 1 and ctx.files.seen(current.dev, fileid)) {} else {
+                    if (linkcount > 1 and ctx.files.visit(current.dev, fileid, linkcount)) {} else {
                         local_bytes += allocsize;
                     }
                 }
@@ -431,99 +420,108 @@ pub fn workerFn(ctx: *WorkerContext) void {
     }
 }
 
+pub const Links = fts_walk.Links;
+
 pub const ScanResult = struct {
-    bytes: i64,
-    err: bool,
-    printable: bool = true,
+    blocks: i64 = 0,
+    err: bool = false,
+    counted: bool = false,
+    printable: bool = false,
 };
+
+fn rootStat(cfg: *const Config, zpath: [*:0]const u8, st: *std.c.Stat) bool {
+    if (cfg.follow == .physical) return std.c.fstatat(std.posix.AT.FDCWD, zpath, st, std.posix.AT.SYMLINK_NOFOLLOW) == 0;
+    if (std.c.fstatat(std.posix.AT.FDCWD, zpath, st, 0) == 0) return true;
+    const saved = sys.__error().*;
+    if (std.c.fstatat(std.posix.AT.FDCWD, zpath, st, std.posix.AT.SYMLINK_NOFOLLOW) != 0) {
+        sys.__error().* = saved;
+        return false;
+    }
+    if (saved == sys.ELOOP and sys.compat_mode("bin/du", "unix2003")) sys.errx(1, "Too many symlinks at %s", zpath);
+    return true;
+}
 
 pub fn scanTarget(
     allocator: std.mem.Allocator,
-    path: []const u8,
-    opts: *const Options,
-    files: *InodeSet,
+    zpath: [*:0]const u8,
+    cfg: *const Config,
+    links: *Links,
 ) ScanResult {
-    const zpath = dupePathZ(allocator, path) catch return .{ .bytes = 0, .err = true, .printable = false };
-    defer zpath.deinit(allocator);
-
+    const path = std.mem.span(zpath);
     var st: std.c.Stat = undefined;
-    const flags: u32 = if (opts.follow != .none) 0 else std.posix.AT.SYMLINK_NOFOLLOW;
-    if (std.c.fstatat(std.posix.AT.FDCWD, zpath.z(), &st, flags) != 0) {
+    if (!rootStat(cfg, zpath, &st)) {
         errors.writeErr(path, errors.errnoMessage());
-        return .{ .bytes = 0, .err = true, .printable = false };
+        return .{ .err = true };
     }
 
     const is_dir = (st.mode & 0o170000) == 0o040000;
-    const dev: u64 = @intCast(st.dev);
+    const dev: u64 = @bitCast(@as(i64, st.dev));
 
     if (!is_dir) {
-        if (st.nlink > 1 and files.seen(dev, st.ino)) {
-            return .{ .bytes = 0, .err = false };
-        }
-        const size: i64 = accounting.statBytes(st.size, st.blocks, opts.apparent);
-        return .{ .bytes = size, .err = false };
+        if (st.nlink > 1 and links.files.visit(dev, st.ino, st.nlink)) return .{};
+        const n = cfg.scale.entryBlocks(st.size, st.blocks);
+        return .{ .blocks = n, .counted = true, .printable = true };
     }
 
-    const root_fd = sys.open(zpath.z(), 0x0000); // O_RDONLY
+    if (fts_walk.onDevfsFd(&st, path, zpath)) return .{};
+    const own = cfg.scale.entryBlocks(st.size, st.blocks);
+    if (fts_walk.dirSeen(&links.dirs, &st, fts_walk.dirLinkCount(zpath))) {
+        return .{ .blocks = own, .counted = true, .printable = cfg.scale.passes(cfg.threshold, own) };
+    }
+
+    const root_fd = sys.open(zpath, 0x0000);
     if (root_fd < 0) {
         errors.writeErr(path, errors.errnoMessage());
-        return .{ .bytes = 0, .err = true, .printable = false };
+        return .{ .err = true };
     }
     _ = sys.close(root_fd);
 
-    var total_bytes = std.atomic.Value(i64).init(
-        accounting.statBytes(st.size, st.blocks, opts.apparent),
-    );
+    var total_bytes = std.atomic.Value(i64).init(accounting.statBytes(st.size, st.blocks, cfg.scale.apparent));
     var had_error = std.atomic.Value(bool).init(false);
-
-    var dirs = InodeSet.init(allocator);
-    defer dirs.deinit();
-    _ = dirs.seen(dev, st.ino);
 
     var queue = WorkQueue.init(allocator, 16384) catch {
         errors.writeErr(path, "out of memory");
-        return .{ .bytes = 0, .err = true, .printable = false };
+        return .{ .err = true };
     };
     defer queue.deinit();
 
     const initial_path = dupePathZ(allocator, path) catch {
         errors.writeErr(path, "out of memory");
-        return .{ .bytes = 0, .err = true, .printable = false };
+        return .{ .err = true };
     };
-    const initial_item = WorkItem{ .path = initial_path, .dev = dev };
-    var initial_batch: [1]WorkItem = .{initial_item};
+    var initial_batch: [1]WorkItem = .{.{ .path = initial_path, .dev = dev }};
     queue.pushBatch(&initial_batch);
 
     var ctx = WorkerContext{
         .allocator = allocator,
         .queue = &queue,
-        .files = files,
-        .dirs = &dirs,
-        .opts = opts,
+        .files = &links.files,
+        .dirs = &links.dirs,
+        .apparent = cfg.scale.apparent,
         .total_bytes = &total_bytes,
         .had_error = &had_error,
     };
 
-    const n_threads = @max(opts.num_threads, 1);
-    const threads = allocator.alloc(std.Thread, n_threads) catch {
-        workerFn(&ctx);
-        return .{ .bytes = total_bytes.load(.monotonic), .err = had_error.load(.monotonic) };
+    runWorkers(allocator, &ctx, cfg.num_threads);
+
+    const n = @divTrunc(total_bytes.load(.monotonic), accounting.sector);
+    return .{
+        .blocks = n,
+        .err = had_error.load(.monotonic),
+        .counted = true,
+        .printable = cfg.scale.passes(cfg.threshold, n),
     };
+}
+
+fn runWorkers(allocator: std.mem.Allocator, ctx: *WorkerContext, num_threads: usize) void {
+    const threads = allocator.alloc(std.Thread, @max(num_threads, 1)) catch return workerFn(ctx);
     defer allocator.free(threads);
 
     var started: usize = 0;
     for (threads) |*t| {
-        t.* = std.Thread.spawn(.{}, workerFn, .{&ctx}) catch break;
+        t.* = std.Thread.spawn(.{}, workerFn, .{ctx}) catch break;
         started += 1;
     }
-
-    if (started == 0) {
-        workerFn(&ctx);
-    } else {
-        for (threads[0..started]) |t| {
-            t.join();
-        }
-    }
-
-    return .{ .bytes = total_bytes.load(.monotonic), .err = had_error.load(.monotonic) };
+    if (started == 0) return workerFn(ctx);
+    for (threads[0..started]) |t| t.join();
 }

@@ -1,16 +1,22 @@
 const std = @import("std");
 
 fn exeMod(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, root: []const u8) *std.Build.Module {
-    return b.createModule(.{
+    const mod = b.createModule(.{
         .root_source_file = b.path(root),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
+    if (target.result.os.tag.isDarwin()) {
+        if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) }); // a non-native target skips SDK detection
+        mod.linkSystemLibrary("util", .{});
+    }
+    return mod;
 }
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const macos_11: std.Target.Query = .{ .os_tag = .macos, .os_version_min = .{ .semver = .{ .major = 11, .minor = 0, .patch = 0 } } }; // match /usr/bin/du: libc fts keeps d//1 only for minos < 26
+    const target = b.standardTargetOptions(.{ .default_target = if (b.graph.host.result.os.tag == .macos) macos_11 else .{} });
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{

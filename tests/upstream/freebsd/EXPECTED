@@ -1,0 +1,4 @@
+# Outcomes /usr/bin/du on macOS gets from this suite. Unlisted tests must PASS.
+# Format: RESULT<TAB>test<TAB>reason. just upstream-bsd fails on any deviation either way.
+FAIL	A_flag	macOS du -g truncates a 10 GiB sparse file to 0 GiB where FreeBSD rounds up to 1
+FAIL	t_flag	APFS reports a much smaller apparent size for directories than UFS/ZFS, so testdir2 stays under -t 10240

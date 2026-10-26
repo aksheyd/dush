@@ -1,0 +1,2 @@
+# Outcomes /usr/bin/du on macOS gets from this suite. Unlisted tests must PASS.
+# Format: RESULT<TAB>test<TAB>reason. just upstream-bsd fails on any deviation either way.
