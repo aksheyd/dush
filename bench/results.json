@@ -1,0 +1,43 @@
+{
+  "diskus_url": "https://github.com/sharkdp/diskus",
+  "measured": "Measured with `hyperfine --shell none --warmup 3` on an Apple M4 (4 performance cores), 164,000 files, 18,001 directories, 11G, warm cache. The default worker count is those 4 cores. `dush -t10` uses every logical core.",
+  "also": "GNU coreutils 9.12 (`gdu -sh`) took 457.0 ms (453.2 … 466.9 ms) on that same tree. On the small bench fixture (16,410 files, 667 directories, 4.8M) dush took 8.0 ms, diskus 16.5 ms, and `du -sh` 23.3 ms.",
+  "rows": [
+    {
+      "command": "dush",
+      "mean": "118.8 ms",
+      "min": "115.2",
+      "max": "130.0",
+      "vs": "1.00x",
+      "format": "11G    /path",
+      "emphasize": true
+    },
+    {
+      "command": "dush -t10",
+      "mean": "147.5 ms",
+      "min": "143.8",
+      "max": "151.1",
+      "vs": "1.24x",
+      "format": "11G    /path",
+      "emphasize": false
+    },
+    {
+      "command": "diskus",
+      "mean": "239.5 ms",
+      "min": "229.0",
+      "max": "272.7",
+      "vs": "2.02x",
+      "format": "11419648000",
+      "emphasize": false
+    },
+    {
+      "command": "du -sh",
+      "mean": "443.0 ms",
+      "min": "438.7",
+      "max": "452.7",
+      "vs": "3.73x",
+      "format": "11G    /path",
+      "emphasize": false
+    }
+  ]
+}
