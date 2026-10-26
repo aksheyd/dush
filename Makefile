@@ -4,7 +4,6 @@ BINDIR ?= $(PREFIX)/bin
 
 TARGET = dush
 
-# dush requires Zig 0.16.x
 ZIG_VERSION := $(shell $(ZIG) version 2>/dev/null)
 ifeq (,$(findstring 0.16.,$(ZIG_VERSION)))
 $(error zig 0.16.x required (found $(ZIG_VERSION)))

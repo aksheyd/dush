@@ -1,21 +1,4 @@
 #!/bin/sh
-# Benchmark dush against macOS `du -sh` and `diskus` with hyperfine.
-#
-# Hermetic & Fair Methodology:
-# - Fair Cache Warming: Uses warmup runs (--warmup 3) so all tools run with
-#   identically primed unified memory / page cache.
-# - Statistical Isolation: Uses `hyperfine --shell none` with interleaved runs
-#   so CPU frequency scaling and background OS jitter affect all tools equally.
-# - Parity Check: Verifies exact byte/string parity before timing so invalid
-#   runs are rejected immediately.
-# - Flexible Target: Can benchmark any real directory or a fixture.
-#
-# Usage:
-#   bench.sh <path-to-dush> [target-dir] [--runs N] [--cold] [--regen]
-# Or via zig:
-#   zig build bench
-#   zig build bench -- /path/to/target
-#   zig build bench -- --cold
 
 set -eu
 
@@ -72,7 +55,6 @@ if ! command -v hyperfine >/dev/null 2>&1; then
     exit 1
 fi
 
-# If no target specified, use fixture
 if [ -z "$TARGET" ]; then
     TARGET="$FIX"
     if [ ! -d "$FIX" ] || [ "$REGEN" = "1" ]; then
@@ -94,7 +76,6 @@ echo "Target  : $TARGET"
 echo "Mode    : $MODE cache (warmup: $WARMUP, min-runs: $RUNS)"
 echo "================================================================="
 
-# --- Parity Verification ---
 DU_OUT="$(du -sh "$TARGET" | tr -s '[:blank:]' ' ')"
 DUSH_OUT="$("$DUSH" "$TARGET" | tr -s '[:blank:]' ' ')"
 
@@ -123,7 +104,6 @@ if command -v diskus >/dev/null 2>&1; then
     fi
 fi
 
-# --- Setup Preparation ---
 PREPARE="sync"
 if [ "$MODE" = "cold" ]; then
     echo "Acquiring sudo credentials for cache purging..."
@@ -131,7 +111,6 @@ if [ "$MODE" = "cold" ]; then
     PREPARE="sync; sudo purge"
 fi
 
-# --- Hyperfine Benchmark ---
 echo "\nRunning benchmark with hyperfine..."
 
 CMD_DU="du -sh \"$TARGET\""
