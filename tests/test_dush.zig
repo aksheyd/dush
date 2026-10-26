@@ -306,6 +306,34 @@ test "parity: apparent size (-A) and odd sizes" {
     try assertOutputParity(allocator, r1.stdout, r2.stdout);
 }
 
+test "parity: apparent size rounds each entry to 512 bytes (-A -k)" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dush_bin = getDushBin();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path_len = try tmp.dir.realPath(io, &path_buf);
+    const root_path = path_buf[0..path_len];
+
+    try tmp.dir.createDirPath(io, "a/b/c");
+    const names = [_][]const u8{ "one", "a/two", "a/b/three", "a/b/c/four", "a/b/c/five", "a/six", "seven", "a/b/eight" };
+    for (names) |name| try tmp.dir.writeFile(io, .{ .sub_path = name, .data = "x" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "a/b/c/odd", .data = "x" ** 1500 });
+    try tmp.dir.symLink(io, "a/b/c/odd", "a/link", .{});
+
+    const r1 = try runCmd(allocator, &.{ dush_bin, "-A", "-k", root_path });
+    defer r1.deinit(allocator);
+    const r2 = try runCmd(allocator, &.{ "du", "-A", "-sk", root_path });
+    defer r2.deinit(allocator);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r1.term);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, r2.term);
+    try assertOutputParity(allocator, r1.stdout, r2.stdout);
+}
+
 test "parity: hardlink deduplication" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;

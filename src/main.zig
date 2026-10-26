@@ -13,6 +13,7 @@ pub const ATTR_CMN_RETURNED_ATTRS: u32 = 0x80000000;
 pub const ATTR_FILE_LINKCOUNT: u32 = 0x00000001;
 pub const ATTR_FILE_TOTALSIZE: u32 = 0x00000002;
 pub const ATTR_FILE_ALLOCSIZE: u32 = 0x00000004;
+pub const ATTR_FILE_DATALENGTH: u32 = 0x00000200;
 
 pub const ATTR_DIR_LINKCOUNT: u32 = 0x00000001;
 pub const ATTR_DIR_ALLOCSIZE: u32 = 0x00000008;
@@ -463,6 +464,10 @@ fn scanDirPosixFallback(
     }
 }
 
+fn roundUp512(size: i64) i64 {
+    return @divTrunc(size + 511, 512) * 512;
+}
+
 fn allocatedSizeAt(dirfd: c_int, name: []const u8, apparent: bool) i64 {
     var name_zbuf: [1024:0]u8 = undefined;
     if (name.len >= name_zbuf.len) return 0;
@@ -470,7 +475,7 @@ fn allocatedSizeAt(dirfd: c_int, name: []const u8, apparent: bool) i64 {
     name_zbuf[name.len] = 0;
     var st: std.c.Stat = undefined;
     if (std.c.fstatat(dirfd, &name_zbuf, &st, std.posix.AT.SYMLINK_NOFOLLOW) != 0) return 0;
-    if (apparent) return @divTrunc(st.size + 511, 512) * 512;
+    if (apparent) return roundUp512(st.size);
     return st.blocks * 512;
 }
 
@@ -480,7 +485,7 @@ pub fn workerFn(ctx: *WorkerContext) void {
         .commonattr = ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_NAME | ATTR_CMN_OBJTYPE | ATTR_CMN_FILEID,
     };
     if (ctx.opts.apparent) {
-        attrList.fileattr = ATTR_FILE_TOTALSIZE | ATTR_FILE_LINKCOUNT;
+        attrList.fileattr = ATTR_FILE_DATALENGTH | ATTR_FILE_LINKCOUNT;
         attrList.dirattr = ATTR_DIR_DATALENGTH | ATTR_DIR_LINKCOUNT;
     } else {
         attrList.fileattr = ATTR_FILE_ALLOCSIZE | ATTR_FILE_LINKCOUNT;
@@ -581,8 +586,10 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         allocsize = readI64(buf[offset..].ptr);
                         offset += 8;
                     }
-                    if (ctx.opts.apparent or !have_dir_size) {
+                    if (!have_dir_size) {
                         allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
+                    } else if (ctx.opts.apparent) {
+                        allocsize = roundUp512(allocsize);
                     }
 
                     if (linkcount > 1 and ctx.dirs.seen(current.dev, fileid)) {
@@ -652,13 +659,15 @@ pub fn workerFn(ctx: *WorkerContext) void {
                         linkcount = readU32(buf[offset..].ptr);
                         offset += 4;
                     }
-                    const have_file_size = (ret_file & (ATTR_FILE_ALLOCSIZE | ATTR_FILE_TOTALSIZE)) != 0;
+                    const have_file_size = (ret_file & (ATTR_FILE_ALLOCSIZE | ATTR_FILE_DATALENGTH)) != 0;
                     if (have_file_size) {
                         allocsize = readI64(buf[offset..].ptr);
                         offset += 8;
                     }
-                    if (ctx.opts.apparent or !have_file_size) {
+                    if (!have_file_size) {
                         allocsize = allocatedSizeAt(dirfd, name_slice, ctx.opts.apparent);
+                    } else if (ctx.opts.apparent) {
+                        allocsize = roundUp512(allocsize);
                     }
 
                     if (linkcount > 1 and ctx.files.seen(current.dev, fileid)) {
@@ -991,6 +1000,13 @@ test "humanize matches du -h formatting" {
     try std.testing.expectEqualStrings("1.0M", humanize(&buf, 1048576));
     try std.testing.expectEqualStrings("1.5M", humanize(&buf, 1572864));
     try std.testing.expectEqualStrings("1.0G", humanize(&buf, 1073741824));
+}
+
+test "roundUp512 matches du -A per-entry rounding" {
+    try std.testing.expectEqual(@as(i64, 0), roundUp512(0));
+    try std.testing.expectEqual(@as(i64, 512), roundUp512(1));
+    try std.testing.expectEqual(@as(i64, 512), roundUp512(512));
+    try std.testing.expectEqual(@as(i64, 1024), roundUp512(513));
 }
 
 test "joinPath" {
