@@ -85,7 +85,7 @@ $ dush -c src bench tests
 `dush` is tested against BSD `du -sh` for 100% numerical and formatting parity:
 
 ```sh
-make test   # Runs native Zig unit and end-to-end parity test suites
+just test   # Same checks as CI: comment ban, Zig tests, frozen du suite, freeze check, README check
 make bench  # Runs hermetic hyperfine benchmark suite (uses native Zig generator)
 ```
 
