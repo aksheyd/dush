@@ -49,6 +49,7 @@ pub const Result = struct {
     got: run.Outcome,
     diff: run.Diff,
     ref_unstable: bool = false,
+    target_unstable: bool = false,
 };
 
 pub fn runCase(a: std.mem.Allocator, io: std.Io, cfg: Config, root: []const u8, c: case.Case) !Result {
@@ -62,11 +63,27 @@ pub fn runCase(a: std.mem.Allocator, io: std.Io, cfg: Config, root: []const u8, 
     var diff = try run.compare(a, want, cfg.ref, got, cfg.link);
     if (want.hang) diff = .{};
     if (!diff.any()) return .{ .built = built, .want = want, .got = got, .diff = diff };
-    const again = try run.exec(a, io, try c.argv(a, cfg.ref, root), root, &env, cfg.timeout);
+    return retryTarget(a, io, cfg, root, c, try rerunRef(a, io, cfg, root, c, built, &env, want, got, diff));
+}
+
+fn rerunRef(a: std.mem.Allocator, io: std.Io, cfg: Config, root: []const u8, c: case.Case, built: []const case.Op, env: *const std.process.Environ.Map, want: run.Outcome, got: run.Outcome, first: run.Diff) !Result {
+    var diff = first;
+    const again = try run.exec(a, io, try c.argv(a, cfg.ref, root), root, env, cfg.timeout);
     if (std.meta.eql(want.code, again.code) and want.hang == again.hang and std.mem.eql(u8, want.stdout, again.stdout) and std.mem.eql(u8, want.stderr, again.stderr))
         return .{ .built = built, .want = want, .got = got, .diff = diff };
     diff = if (again.hang) .{} else try run.compare(a, again, cfg.ref, got, cfg.link);
     return .{ .built = built, .want = again, .got = got, .diff = diff, .ref_unstable = true };
+}
+
+fn retryTarget(a: std.mem.Allocator, io: std.Io, cfg: Config, root: []const u8, c: case.Case, r: Result) !Result {
+    if (!r.diff.any()) return r;
+    var env = try run.environ(a, c.env, cfg.target_env);
+    const again = try run.exec(a, io, try c.argv(a, cfg.link, root), root, &env, cfg.timeout);
+    const d = try run.compare(a, r.want, cfg.ref, again, cfg.link);
+    if (d.any()) return r;
+    var out = r;
+    out.target_unstable = true;
+    return out;
 }
 
 const Bucket = struct {
@@ -87,9 +104,11 @@ const Shared = struct {
     errors: std.atomic.Value(u64) = .init(0),
     ref_hangs: std.atomic.Value(u64) = .init(0),
     ref_unstable: std.atomic.Value(u64) = .init(0),
+    target_unstable: std.atomic.Value(u64) = .init(0),
     mutex: std.Io.Mutex = .init,
     quick: std.StringArrayHashMapUnmanaged(usize) = .empty,
     buckets: std.StringArrayHashMapUnmanaged(Bucket) = .empty,
+    unstable: std.ArrayList([]const u8) = .empty,
 };
 
 const gpa = std.heap.smp_allocator;
@@ -278,6 +297,7 @@ fn describe(a: std.mem.Allocator, c: case.Case, r: Result, key: []const u8) ![]c
     try w(a, &out, "\nops ({d}):\n", .{c.ops.len});
     for (c.ops) |op| try w(a, &out, "  {s} {f} target={f} size={d} data={d} mode={o}\n", .{ @tagName(op.kind), std.zig.fmtString(op.path), std.zig.fmtString(op.target), op.size, op.data, op.mode });
     if (r.ref_unstable) try w(a, &out, "reference changed output on rerun; the du lines below are from the rerun\n", .{});
+    if (r.target_unstable) try w(a, &out, "target changed output on rerun and the rerun matched du; the dush lines below are from the first run\n", .{});
     try w(a, &out, "du   exit={?d} hang={} signal={d}\n  stdout: {f}\n  stderr: {f}\n", .{ r.want.code, r.want.hang, r.want.sig, std.zig.fmtString(r.want.stdout), std.zig.fmtString(r.want.stderr) });
     try w(a, &out, "dush exit={?d} hang={} signal={d}\n  stdout: {f}\n  stderr: {f}\n", .{ r.got.code, r.got.hang, r.got.sig, std.zig.fmtString(r.got.stdout), std.zig.fmtString(r.got.stderr) });
     return out.items;
@@ -299,6 +319,17 @@ fn one(sh: *Shared, a: std.mem.Allocator, root: []const u8, seed: u64) !void {
     if (r.want.hang) _ = sh.ref_hangs.fetchAdd(1, .monotonic);
     if (r.ref_unstable) _ = sh.ref_unstable.fetchAdd(1, .monotonic);
     if (!r.diff.any()) return;
+    if (r.target_unstable) {
+        _ = sh.target_unstable.fetchAdd(1, .monotonic);
+        const key = try bucketKey(a, c, r.diff);
+        const dir = try std.fmt.allocPrint(a, "{s}/target-unstable/{s}/seed-{d}", .{ sh.opts.failures, try slug(a, key), seed });
+        sh.mutex.lockUncancelable(io);
+        defer sh.mutex.unlock(io);
+        try sh.unstable.append(gpa, try gpa.dupe(u8, dir));
+        try writeRepro(a, io, sh.opts, dir, c, r, key);
+        std.debug.print("target unstable seed={d} [{s}] -> {s}\n", .{ seed, key, dir });
+        return;
+    }
     _ = sh.mismatches.fetchAdd(1, .monotonic);
     const qk = try quickKey(a, c, r.diff);
     var go = false;
@@ -364,7 +395,8 @@ fn summary(a: std.mem.Allocator, sh: *Shared, elapsed_ms: i64) ![]const u8 {
             try o.appendSlice(al, try std.fmt.allocPrint(al, f, args));
         }
     }.p;
-    try w(a, &out, "target: {s}\nreference: {s}\ncases: {d}\nmismatches: {d}\nharness errors: {d}\nreference timeouts (skipped): {d}\nreference unstable on rerun (compared against the rerun): {d}\nelapsed: {d} ms\n", .{ sh.opts.cfg.target, sh.opts.cfg.ref, sh.cases.raw, sh.mismatches.raw, sh.errors.raw, sh.ref_hangs.raw, sh.ref_unstable.raw, elapsed_ms });
+    try w(a, &out, "target: {s}\nreference: {s}\ncases: {d}\nmismatches: {d}\nharness errors: {d}\nreference timeouts (skipped): {d}\nreference unstable on rerun (compared against the rerun): {d}\ntarget unstable on rerun (first run differed, rerun matched du): {d}\nelapsed: {d} ms\n", .{ sh.opts.cfg.target, sh.opts.cfg.ref, sh.cases.raw, sh.mismatches.raw, sh.errors.raw, sh.ref_hangs.raw, sh.ref_unstable.raw, sh.target_unstable.raw, elapsed_ms });
+    for (sh.unstable.items) |d| try w(a, &out, "  target unstable: {s}/repro.sh\n", .{d});
     if (sh.opts.random) try w(a, &out, "seed base: {d}\n", .{sh.base});
     const Ctx = struct {
         m: *const std.StringArrayHashMapUnmanaged(usize),

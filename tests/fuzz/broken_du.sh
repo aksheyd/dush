@@ -6,5 +6,6 @@ blocksize) unset BLOCKSIZE; exec "$REAL" "$@" ;;
 exit) "$REAL" "$@"; exit 0 ;;
 stderr) exec "$REAL" "$@" 2>/dev/null ;;
 k) exec "$REAL" -k "$@" ;;
+flaky) if [ -e "$BROKEN_STATE" ]; then rm -f "$BROKEN_STATE"; exec "$REAL" "$@"; fi; : >"$BROKEN_STATE"; "$REAL" "$@"; rc=$?; printf '0\tflaky\n'; exit "$rc" ;;
 *) exec "$REAL" "$@" ;;
 esac

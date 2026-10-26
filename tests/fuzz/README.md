@@ -29,7 +29,7 @@ These are compared byte for byte:
 - the exit code
 - stderr
 
-The only normalization is the program name: a leading `dush: ` and the invocation path both become `du`. A hang (10 s by default) or a death by signal is always a mismatch. If the reference itself times out, the case is skipped and counted. When a case mismatches, `/usr/bin/du` runs a second time; if its own result changes, the rerun becomes the reference, the case is counted as reference unstable, and `case.txt` says so. macOS `du` does this on its first look at some freshly made symlink loops: seed 12634 prints `0` for `-P -s a.c43/c49/e63/` once and `Too many levels of symbolic links` on every later run. When stdout differs only in line order, the case is labelled `order` so it is easy to find, but it still counts as a mismatch.
+The only normalization is the program name: a leading `dush: ` and the invocation path both become `du`. A hang (10 s by default) or a death by signal is always a mismatch. If the reference itself times out, the case is skipped and counted. When a case mismatches, `/usr/bin/du` runs a second time; if its own result changes, the rerun becomes the reference, the case is counted as reference unstable, and `case.txt` says so. macOS `du` does this on its first look at some freshly made symlink loops: seed 12634 prints `0` for `-P -s a.c43/c49/e63/` once and `Too many levels of symbolic links` on every later run. If the case still mismatches, the target runs a second time. If that rerun matches `du` exactly, the case is counted as target unstable rather than as a mismatch, its unshrunk repro goes under `target-unstable/` in the failures directory, and the summary lists every one. This is a macOS race, not a dush one: under heavy parallel load, libc `fts_open` with `FTS_PHYSICAL | FTS_NOCHDIR` on `c/`, where `c` is a symlink to a regular file, now and then returns `FTS_F` instead of `Not a directory`. A six-line C program that only calls `fts_open` and `fts_read` hits it about once in a thousand runs under load, and the long run saw it twice in 245,147 cases. A target that is wrong every time is still caught, because its rerun is wrong too; `just fuzz-selftest` checks that and also checks that a target which is wrong only on its first run is reported as unstable. When stdout differs only in line order, the case is labelled `order` so it is easy to find, but it still counts as a mismatch.
 
 ## Shrinking and repros
 
@@ -48,7 +48,7 @@ Each shrunk case is written to `fuzz-failures/<bucket>/seed-N/` as two files:
 just fuzz                   seeds 1:1500, fixed, used by CI
 just fuzz-long 1800         random seeds for 30 minutes
 just fuzz-replay 1234       rebuild seed 1234, print it, write its repro
-just fuzz-selftest          /usr/bin/du against itself (must be clean) and against broken_du.sh (must be caught)
+just fuzz-selftest          /usr/bin/du against itself (must be clean) and against broken_du.sh (must be caught, or reported as unstable for the flaky mode)
 just fuzz-stress            thread-count determinism, du-mode stability, concurrent mutation
 ```
 

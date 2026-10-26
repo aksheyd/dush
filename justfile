@@ -71,6 +71,7 @@ fuzz-replay SEED:
 fuzz-selftest SEEDS="1:500":
     {{fuzz_run}} run --target /usr/bin/du --seeds {{SEEDS}} --failures fuzz-failures/selftest-du
     for m in order blocksize exit stderr k; do {{fuzz_run}} run --target tests/fuzz/broken_du.sh --target-env BROKEN_MODE=$m --seeds {{SEEDS}} --no-shrink --expect-mismatch --failures fuzz-failures/selftest-$m >/dev/null 2>&1 && echo "broken $m: caught" || { echo "broken $m: NOT caught"; exit 1; }; done
+    mkdir -p fuzz-failures && rm -f fuzz-failures/flaky-state && {{fuzz_run}} run --target tests/fuzz/broken_du.sh --target-env BROKEN_MODE=flaky --target-env BROKEN_STATE=$PWD/fuzz-failures/flaky-state --jobs 1 --seeds 1:20 --failures fuzz-failures/selftest-flaky 2>&1 | grep -qx 'target unstable on rerun (first run differed, rerun matched du): 20' && echo "flaky target: reported as unstable" || { echo "flaky target: NOT reported"; exit 1; }
 
 fuzz-stress *ARGS:
     make dush
