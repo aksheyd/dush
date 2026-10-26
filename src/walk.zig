@@ -268,7 +268,7 @@ pub fn workerFn(ctx: *WorkerContext) void {
             }
         }
 
-        var dirfd = sys.open(current.path.z(), 0x0000); // O_RDONLY
+        var dirfd = sys.open(current.path.z(), 0x0000);
         if (dirfd < 0) {
             errors.writeErr(current.path.slice(), errors.errnoMessage());
             ctx.had_error.store(true, .monotonic);
@@ -289,7 +289,7 @@ pub fn workerFn(ctx: *WorkerContext) void {
                 const e = sys.__error().*;
                 if (bulk_attempts == 0 and (e == sys.ENOTSUP or e == sys.EINVAL or e == sys.EACCES)) {
                     scanDirPosixFallback(ctx, dirfd, parent_slice, current.dev, &local_bytes, &spill, &spill_count);
-                    dirfd = -1; // Closed by scanDirPosixFallback
+                    dirfd = -1;
                 } else {
                     errors.writeErr(parent_slice, errors.errnoMessage());
                     ctx.had_error.store(true, .monotonic);
@@ -317,7 +317,7 @@ pub fn workerFn(ctx: *WorkerContext) void {
                 offset += 8;
 
                 const name_bytes: [*]const u8 = @ptrCast(name_ref_ptr + @as(usize, @intCast(name_offset)));
-                const name_slice = name_bytes[0 .. name_len - 1]; // strip NUL
+                const name_slice = name_bytes[0 .. name_len - 1];
 
                 var obj_type: u32 = 0;
                 if ((ret_common & sys.ATTR_CMN_OBJTYPE) != 0) {
@@ -437,7 +437,13 @@ fn rootStat(cfg: *const Config, zpath: [*:0]const u8, st: *std.c.Stat) bool {
         sys.__error().* = saved;
         return false;
     }
-    if (saved == sys.ELOOP and sys.compat_mode("bin/du", "unix2003")) sys.errx(1, "Too many symlinks at %s", zpath);
+    if (saved == sys.ELOOP and sys.compat_mode("bin/du", "unix2003")) {
+        if (errors.deferring) {
+            sys.__error().* = saved;
+            return false;
+        }
+        sys.errx(1, "Too many symlinks at %s", zpath);
+    }
     return true;
 }
 

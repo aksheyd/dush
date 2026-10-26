@@ -14,13 +14,24 @@ pub fn progname() []const u8 {
     return std.mem.span(sys.getprogname());
 }
 
+pub var deferring: bool = false;
+pub var deferred = std.atomic.Value(bool).init(false);
+
+fn holdBack() bool {
+    if (!deferring) return false;
+    deferred.store(true, .monotonic);
+    return true;
+}
+
 pub fn writeErr(path: []const u8, msg: []const u8) void {
+    if (holdBack()) return;
     var buf: [3 * std.fs.max_path_bytes]u8 = undefined;
     const line = std.fmt.bufPrint(&buf, "{s}: {s}: {s}\n", .{ progname(), path, msg }) catch return;
     writeAll(std.posix.STDERR_FILENO, line);
 }
 
 pub fn writeErrIn(dir: []const u8, name: []const u8, msg: []const u8) void {
+    if (holdBack()) return;
     var buf: [3 * std.fs.max_path_bytes]u8 = undefined;
     const sep = if (dir.len == 0 or std.mem.eql(u8, dir, "/")) "" else "/";
     const line = std.fmt.bufPrint(&buf, "{s}: {s}{s}{s}: {s}\n", .{ progname(), dir, sep, name, msg }) catch return;

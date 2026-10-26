@@ -5,6 +5,7 @@ const format = @import("format.zig");
 const walk = @import("walk.zig");
 const fts_walk = @import("fts_walk.zig");
 const InodeSet = @import("inodes.zig").InodeSet;
+const errors = @import("errors.zig");
 
 extern "c" fn sysctlbyname(name: [*:0]const u8, oldp: ?*anyopaque, oldlenp: ?*usize, newp: ?*const anyopaque, newlen: usize) c_int;
 
@@ -21,22 +22,28 @@ fn hasEmptyOperand(operands: sys.FtsArgv) bool {
     return false;
 }
 
-fn runFast(allocator: std.mem.Allocator, cfg: *const cli.Config, links: *fts_walk.Links, out: format.Printer) u8 {
+const Line = struct { blocks: i64, label: [*:0]const u8 };
+
+fn runFast(allocator: std.mem.Allocator, cfg: *const cli.Config, links: *fts_walk.Links, out: format.Printer) ?u8 {
     if (hasEmptyOperand(cfg.operands)) {
         sys.__error().* = sys.ENOENT;
         sys.err(1, "fts_open");
     }
-    var rval: u8 = 0;
+    errors.deferring = true;
+    defer errors.deferring = false;
+    var lines: std.ArrayListUnmanaged(Line) = .empty;
+    defer lines.deinit(allocator);
     var total: i64 = 0;
     var i: usize = 0;
     while (cfg.operands[i]) |op| : (i += 1) {
         const r = walk.scanTarget(allocator, op, cfg, links);
-        if (r.err) rval = 1;
+        if (r.err or errors.deferred.load(.monotonic)) return null;
         if (r.counted) total += r.blocks;
-        if (r.printable) out.line(r.blocks, op);
+        if (r.printable) lines.append(allocator, .{ .blocks = r.blocks, .label = op }) catch return null;
     }
+    for (lines.items) |l| out.line(l.blocks, l.label);
     if (cfg.grand_total) out.line(total, "total");
-    return rval;
+    return 0;
 }
 
 pub fn main(init: std.process.Init) u8 {
@@ -55,10 +62,15 @@ pub fn main(init: std.process.Init) u8 {
     var links = fts_walk.Links{ .files = InodeSet.init(allocator), .dirs = InodeSet.init(allocator) };
     const out = format.Printer{ .scale = cfg.scale, .units = cfg.units };
 
-    const rval = if (cfg.fastPathEligible())
-        runFast(allocator, &cfg, &links, out)
-    else
-        fts_walk.run(&cfg, &links, out);
+    const fast = if (cfg.fastPathEligible()) runFast(allocator, &cfg, &links, out) else null;
+    const rval = fast orelse blk: {
+        if (cfg.fastPathEligible()) {
+            links.files.deinit();
+            links.dirs.deinit();
+            links = .{ .files = InodeSet.init(allocator), .dirs = InodeSet.init(allocator) };
+        }
+        break :blk fts_walk.run(&cfg, &links, out);
+    };
 
     if (rval == 0 and (sys.ferror(sys.__stdoutp) != 0 or sys.fflush(sys.__stdoutp) != 0)) sys.err(1, "stdout");
     return rval;
