@@ -22,3 +22,6 @@ readme-check:
 record-bench:
     make bench
     zig run bench/readme.zig -- record
+
+frozen-gnu:
+    zig test frozen/gnu/all.zig
