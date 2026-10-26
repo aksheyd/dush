@@ -1,0 +1,10 @@
+name = "dush-proofs"
+version = "0.1.0"
+defaultTargets = ["Dush", "dushref"]
+
+[[lean_lib]]
+name = "Dush"
+
+[[lean_exe]]
+name = "dushref"
+root = "Ref"

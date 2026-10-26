@@ -93,10 +93,9 @@ pub fn run(cfg: *const Config, links: *Links, out: Printer) u8 {
                         sys.errx(1, "Too many symlinks at %s", p.fts_path);
                 }
                 if (!ignored(cfg, p)) {
-                    const skip = !cfg.count_links and st.nlink > 1 and
-                        links.files.visit(@bitCast(@as(i64, st.dev)), st.ino, st.nlink);
-                    if (!skip) {
-                        const cur = cfg.scale.entryBlocks(st.size, st.blocks);
+                    const own = cfg.scale.entryBlocks(st.size, st.blocks);
+                    const charged = if (cfg.count_links) own else links.files.chargeFile(@bitCast(@as(i64, st.dev)), st.ino, st.nlink, own);
+                    if (charged) |cur| {
                         if (cfg.all or p.fts_level == 0) out.line(cur, p.fts_path);
                         p.fts_parent.fts_number += cur;
                     }

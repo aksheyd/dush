@@ -38,9 +38,17 @@ pub fn build(b: *std.Build) void {
     const run_parity_tests = b.addRunArtifact(parity_tests);
     run_parity_tests.step.dependOn(&b.addInstallArtifact(exe, .{}).step);
 
-    const test_step = b.step("test", "Run unit and parity tests");
+    const bridge_mod = exeMod(b, target, optimize, "tests/proof/bridge_test.zig");
+    bridge_mod.addImport("dush", exeMod(b, target, optimize, "src/root.zig"));
+    bridge_mod.addAnonymousImport("golden", .{ .root_source_file = b.path("proofs/vectors/golden.txt") });
+    const run_bridge_tests = b.addRunArtifact(b.addTest(.{ .root_module = bridge_mod }));
+    const bridge_step = b.step("proof-bridge", "Check src against the Lean golden vectors");
+    bridge_step.dependOn(&run_bridge_tests.step);
+
+    const test_step = b.step("test", "Run unit, parity, and proof bridge tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_parity_tests.step);
+    test_step.dependOn(&run_bridge_tests.step);
 
     const gen_fixture = b.addExecutable(.{
         .name = "generate-fixture",

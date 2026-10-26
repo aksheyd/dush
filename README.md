@@ -118,6 +118,8 @@ make bench  # Runs hermetic hyperfine benchmark suite (uses native Zig generator
 
 Not every upstream case passes against `/usr/bin/du` itself: GNU tests use GNU-only options, and a few FreeBSD tests assume UFS/ZFS sizes. Each suite has an `EXPECTED` file listing the outcomes `/usr/bin/du` gets, with a reason per non-pass. A suite passes when `dush` gets exactly those outcomes, so a new failure and an unexpected pass both fail CI; skips are counted and checked too. To check a baseline itself, run the suite with `DUSH_BIN=/usr/bin/du`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the merge gate and `just bench-compare`.
 
+`proofs/` holds a Lean 4 model of the size accounting with machine-checked proofs: totals do not depend on traversal order or how entries are split across workers, each hard-linked inode is charged once, rounding and block conversion match `du`, the `-h` unit rule and strings, and `-c` across operands. `just proof` builds the proofs, audits their axioms and checks `src/` against golden vectors exported from Lean. [proofs/README.md](proofs/README.md) lists what is proven, what is only tested, and what is not covered.
+
 ### Layout
 
 | Path | Contents |
@@ -126,14 +128,16 @@ Not every upstream case passes against `/usr/bin/du` itself: GNU tests use GNU-o
 | `src/cli.zig` | Options, argument parsing, usage, default thread count |
 | `src/walk.zig` | Parallel `getattrlistbulk` walker with a `readdir`/`fstatat` fallback |
 | `src/fts_walk.zig` | `fts(3)` walker for the per-entry modes (`-a`, `-d`, `-L`, `-x`, `-I`, ...), mirroring `du.c` |
-| `src/accounting.zig` | Pure size math: 512-byte rounding, block conversion |
-| `src/inodes.zig` | Thread-safe `(dev, ino)` set for hard-link dedup |
-| `src/format.zig` | BSD `humanize_number` clone and output lines |
+| `src/accounting.zig` | Pure size math: 512-byte rounding, `howmany`, and `Scale` (du's block-size arithmetic) |
+| `src/inodes.zig` | Thread-safe `(dev, ino)` set and `chargeFile`, the hard-link dedup kernel |
+| `src/format.zig` | `humanize_number` clone (binary and `--si`) and output lines |
 | `src/errors.zig`, `src/path.zig`, `src/sys.zig` | Diagnostics, path joining, libc and Darwin bindings |
 | `tests/unit/` | Zig unit tests against the `src/` modules |
 | `tests/parity/` | Black-box parity tests of the built binary against `/usr/bin/du` |
 | `tests/frozen/` | Frozen Zig ports of the BSD and GNU `du` suites; edits need `ALLOW-FROZEN-EDIT` |
 | `tests/upstream/` | Upstream `du` test scripts, verbatim and frozen |
+| `tests/proof/` | Bridge test of `src/` against the Lean golden vectors |
+| `proofs/` | Lean 4 model and proofs of the size accounting; see [proofs/README.md](proofs/README.md) |
 | `bench/` | Hyperfine benchmark, fixture generator, recorded results |
 | `tools/` | Comment ban, freeze check, README renderer, upstream suite runners, `EXPECTED` baseline checker |
 
