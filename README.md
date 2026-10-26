@@ -31,6 +31,7 @@ GNU coreutils 9.12 (`gdu -sh`) took 457.0 ms (453.2 … 466.9 ms) on that same t
 - **Work-stealing concurrency** — Traverses directory trees with thread-local stacks and byte accumulators. On Apple Silicon the default is the performance-core count; `-t` sets the worker count explicitly.
 - **Zero-allocation traversal** — Processes file metadata directly in-place from the kernel bulk buffer without heap-allocating path strings.
 - **Hardlink deduplication** — Accurately tracks multi-link inodes (`st_nlink > 1`) so hardlinks are counted exactly once.
+- **`du`-style errors** — Entries that cannot be read are reported on stderr in the same format as `du`, left out of the size, and the walk continues; the total still prints and the exit status is 1.
 
 ## Installation
 
