@@ -126,11 +126,16 @@ fn firstToken(text: []const u8) []const u8 {
 }
 
 fn mainChangedWithoutReadme(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !bool {
-    const base = try std.fmt.allocPrint(alloc, "origin/{s}...HEAD", .{env.get("GITHUB_BASE_REF") orelse "main"});
+    const base = try std.fmt.allocPrint(alloc, "origin/{s}...HEAD", .{baseBranch(env.get("GITHUB_BASE_REF"))});
     const committed = try git(alloc, io, &.{ "git", "diff", "--name-only", base, "--", "src", readme_path });
     const uncommitted = try git(alloc, io, &.{ "git", "diff", "--name-only", "HEAD", "--", "src", readme_path });
     const changed = try std.mem.concat(alloc, u8, &.{ committed, uncommitted });
     return hasSrcLine(changed) and !hasLine(changed, readme_path);
+}
+
+pub fn baseBranch(ref: ?[]const u8) []const u8 {
+    const r = ref orelse return "main";
+    return if (r.len == 0) "main" else r;
 }
 
 fn hasSrcLine(text: []const u8) bool {
@@ -160,4 +165,10 @@ fn git(alloc: std.mem.Allocator, io: std.Io, argv: []const []const u8) ![]u8 {
 
 fn read(alloc: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(io, path, alloc, .limited(8 * 1024 * 1024));
+}
+
+test "a push build sets GITHUB_BASE_REF to empty and compares against main" {
+    try std.testing.expectEqualStrings("main", baseBranch(null));
+    try std.testing.expectEqualStrings("main", baseBranch(""));
+    try std.testing.expectEqualStrings("akshey/x", baseBranch("akshey/x"));
 }

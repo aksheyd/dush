@@ -4,3 +4,4 @@ zig-out/
 /dush
 *.dSYM/
 .DS_Store
+fuzz-failures/
