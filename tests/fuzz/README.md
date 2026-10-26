@@ -29,7 +29,7 @@ These are compared byte for byte:
 - the exit code
 - stderr
 
-The only normalization is the program name: a leading `dush: ` and the invocation path both become `du`. A hang (10 s by default) or a death by signal is always a mismatch. When stdout differs only in line order, the case is labelled `order` so it is easy to find, but it still counts as a mismatch.
+The only normalization is the program name: a leading `dush: ` and the invocation path both become `du`. A hang (10 s by default) or a death by signal is always a mismatch. If the reference itself times out, the case is skipped and counted. When a case mismatches, `/usr/bin/du` runs a second time; if its own result changes, the rerun becomes the reference, the case is counted as reference unstable, and `case.txt` says so. macOS `du` does this on its first look at some freshly made symlink loops: seed 12634 prints `0` for `-P -s a.c43/c49/e63/` once and `Too many levels of symbolic links` on every later run. When stdout differs only in line order, the case is labelled `order` so it is easy to find, but it still counts as a mismatch.
 
 ## Shrinking and repros
 

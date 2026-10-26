@@ -48,6 +48,7 @@ pub const Result = struct {
     want: run.Outcome,
     got: run.Outcome,
     diff: run.Diff,
+    ref_unstable: bool = false,
 };
 
 pub fn runCase(a: std.mem.Allocator, io: std.Io, cfg: Config, root: []const u8, c: case.Case) !Result {
@@ -60,7 +61,12 @@ pub fn runCase(a: std.mem.Allocator, io: std.Io, cfg: Config, root: []const u8, 
     const got = try run.exec(a, io, try c.argv(a, cfg.link, root), root, &tenv, cfg.timeout);
     var diff = try run.compare(a, want, cfg.ref, got, cfg.link);
     if (want.hang) diff = .{};
-    return .{ .built = built, .want = want, .got = got, .diff = diff };
+    if (!diff.any()) return .{ .built = built, .want = want, .got = got, .diff = diff };
+    const again = try run.exec(a, io, try c.argv(a, cfg.ref, root), root, &env, cfg.timeout);
+    if (std.meta.eql(want.code, again.code) and want.hang == again.hang and std.mem.eql(u8, want.stdout, again.stdout) and std.mem.eql(u8, want.stderr, again.stderr))
+        return .{ .built = built, .want = want, .got = got, .diff = diff };
+    diff = if (again.hang) .{} else try run.compare(a, again, cfg.ref, got, cfg.link);
+    return .{ .built = built, .want = again, .got = got, .diff = diff, .ref_unstable = true };
 }
 
 const Bucket = struct {
@@ -80,6 +86,7 @@ const Shared = struct {
     mismatches: std.atomic.Value(u64) = .init(0),
     errors: std.atomic.Value(u64) = .init(0),
     ref_hangs: std.atomic.Value(u64) = .init(0),
+    ref_unstable: std.atomic.Value(u64) = .init(0),
     mutex: std.Io.Mutex = .init,
     quick: std.StringArrayHashMapUnmanaged(usize) = .empty,
     buckets: std.StringArrayHashMapUnmanaged(Bucket) = .empty,
@@ -270,6 +277,7 @@ fn describe(a: std.mem.Allocator, c: case.Case, r: Result, key: []const u8) ![]c
     for (c.env) |e| try w(a, &out, " {s}={f}", .{ e.name, std.zig.fmtString(e.value) });
     try w(a, &out, "\nops ({d}):\n", .{c.ops.len});
     for (c.ops) |op| try w(a, &out, "  {s} {f} target={f} size={d} data={d} mode={o}\n", .{ @tagName(op.kind), std.zig.fmtString(op.path), std.zig.fmtString(op.target), op.size, op.data, op.mode });
+    if (r.ref_unstable) try w(a, &out, "reference changed output on rerun; the du lines below are from the rerun\n", .{});
     try w(a, &out, "du   exit={?d} hang={} signal={d}\n  stdout: {f}\n  stderr: {f}\n", .{ r.want.code, r.want.hang, r.want.sig, std.zig.fmtString(r.want.stdout), std.zig.fmtString(r.want.stderr) });
     try w(a, &out, "dush exit={?d} hang={} signal={d}\n  stdout: {f}\n  stderr: {f}\n", .{ r.got.code, r.got.hang, r.got.sig, std.zig.fmtString(r.got.stdout), std.zig.fmtString(r.got.stderr) });
     return out.items;
@@ -289,6 +297,7 @@ fn one(sh: *Shared, a: std.mem.Allocator, root: []const u8, seed: u64) !void {
     const r = try runCase(a, io, sh.opts.cfg, root, c);
     _ = sh.cases.fetchAdd(1, .monotonic);
     if (r.want.hang) _ = sh.ref_hangs.fetchAdd(1, .monotonic);
+    if (r.ref_unstable) _ = sh.ref_unstable.fetchAdd(1, .monotonic);
     if (!r.diff.any()) return;
     _ = sh.mismatches.fetchAdd(1, .monotonic);
     const qk = try quickKey(a, c, r.diff);
@@ -355,7 +364,7 @@ fn summary(a: std.mem.Allocator, sh: *Shared, elapsed_ms: i64) ![]const u8 {
             try o.appendSlice(al, try std.fmt.allocPrint(al, f, args));
         }
     }.p;
-    try w(a, &out, "target: {s}\nreference: {s}\ncases: {d}\nmismatches: {d}\nharness errors: {d}\nreference timeouts (skipped): {d}\nelapsed: {d} ms\n", .{ sh.opts.cfg.target, sh.opts.cfg.ref, sh.cases.raw, sh.mismatches.raw, sh.errors.raw, sh.ref_hangs.raw, elapsed_ms });
+    try w(a, &out, "target: {s}\nreference: {s}\ncases: {d}\nmismatches: {d}\nharness errors: {d}\nreference timeouts (skipped): {d}\nreference unstable on rerun (compared against the rerun): {d}\nelapsed: {d} ms\n", .{ sh.opts.cfg.target, sh.opts.cfg.ref, sh.cases.raw, sh.mismatches.raw, sh.errors.raw, sh.ref_hangs.raw, sh.ref_unstable.raw, elapsed_ms });
     if (sh.opts.random) try w(a, &out, "seed base: {d}\n", .{sh.base});
     const Ctx = struct {
         m: *const std.StringArrayHashMapUnmanaged(usize),
